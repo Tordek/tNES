@@ -1,0 +1,61 @@
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+# @unused
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+cc_library(
+    name = "cpu",
+    srcs = ["src/cpu/cpu.c"],
+    hdrs = ["src/cpu/cpu.h"],
+    includes = ["src"],
+)
+
+cc_library(
+    name = "bus",
+    srcs = ["src/bus/bus.c"],
+    hdrs = ["src/bus/bus.h"],
+    includes = ["src"],
+)
+
+cc_library(
+    name = "ppu",
+    srcs = ["src/ppu/ppu.c"],
+    hdrs = ["src/ppu/ppu.h"],
+    includes = ["src"],
+)
+
+cc_library(
+    name = "rom",
+    srcs = ["src/rom/rom.c"],
+    hdrs = ["src/rom/rom.h"],
+    includes = ["src"],
+)
+
+cc_binary(
+    name = "tnes",
+    srcs = ["src/main.c"],
+    deps = [
+        ":cpu",
+        ":bus",
+        ":ppu",
+        ":rom",
+    ],
+)
+
+# cc_test(
+#     name = "cpu_test",
+#     srcs = ["tests/cpu_test.c"],
+#     deps = [":cpu"],
+# )
+
+# cc_test(
+#     name = "bus_test",
+#     srcs = ["tests/bus_test.c"],
+#     deps = [":bus"],
+# )
+
+# cc_test(
+#     name = "ppu_test",
+#     srcs = ["tests/ppu_test.c"],
+#     deps = [":ppu"],
+# )
