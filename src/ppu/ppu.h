@@ -1,0 +1,4 @@
+struct ppu
+{
+  int clock;
+};
