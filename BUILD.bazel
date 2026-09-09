@@ -1,5 +1,6 @@
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
 # @unused
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
@@ -7,13 +8,6 @@ cc_library(
     name = "cpu",
     srcs = ["src/cpu/cpu.c"],
     hdrs = ["src/cpu/cpu.h"],
-    includes = ["src"],
-)
-
-cc_library(
-    name = "bus",
-    srcs = ["src/bus/bus.c"],
-    hdrs = ["src/bus/bus.h"],
     includes = ["src"],
 )
 
@@ -31,14 +25,64 @@ cc_library(
     includes = ["src"],
 )
 
-cc_binary(
-    name = "tnes",
-    srcs = ["src/main.c"],
+cc_library(
+    name = "cartridge",
+    srcs = ["src/cartridge/cartridge.c"],
+    hdrs = ["src/cartridge/cartridge.h"],
+    includes = ["src"],
     deps = [
         ":cpu",
-        ":bus",
         ":ppu",
         ":rom",
+    ],
+)
+
+cc_library(
+    name = "machine",
+    srcs = ["src/machine/machine.c"],
+    hdrs = ["src/machine/machine.h"],
+    includes = ["src"],
+    deps = [
+        ":cartridge",
+        ":cpu",
+        ":ppu",
+    ],
+)
+
+cc_library(
+    name = "sdl",
+    srcs = ["src/sdl/sdl.c"],
+    hdrs = ["src/sdl/sdl.h"],
+    includes = ["src"],
+    deps = [":machine"],
+)
+
+cc_binary(
+    name = "tnes-debug",
+    srcs = ["src/main_debug.c"],
+    deps = [
+        ":cartridge",
+        ":cpu",
+        ":machine",
+        ":ppu",
+        ":rom",
+    ],
+)
+
+cc_binary(
+    name = "tnes",
+    srcs = ["src/main_sdl.c"],
+    linkopts = [
+        "-lSDL3",
+        "-lSDL3_ttf",
+    ],
+    deps = [
+        ":cartridge",
+        ":cpu",
+        ":machine",
+        ":ppu",
+        ":rom",
+        ":sdl",
     ],
 )
 
