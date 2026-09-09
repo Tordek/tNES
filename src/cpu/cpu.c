@@ -30,7 +30,6 @@ bool run_break(ic_6502_registers *cpu, struct ic_6502_bus *bus)
     bus->read(bus->context, cpu->pc + 1);
     return false;
   case 2:
-    cpu->sp--;
     if (cpu->state == IC_6502_RESET)
     {
       // Fake-push PC >> 8
@@ -40,12 +39,12 @@ bool run_break(ic_6502_registers *cpu, struct ic_6502_bus *bus)
     {
       bus->write(bus->context, 0x100 + cpu->sp, cpu->pc >> 8);
     }
+    cpu->sp--;
     cpu->cycle++;
     return false;
   case 3:
     cpu->cycle++;
     // Fake-push PC
-    cpu->sp--;
     if (cpu->state == IC_6502_RESET)
     {
       // Fake-push PC >> 8
@@ -55,10 +54,10 @@ bool run_break(ic_6502_registers *cpu, struct ic_6502_bus *bus)
     {
       bus->write(bus->context, 0x100 + cpu->sp, cpu->pc & 0xff);
     }
+    cpu->sp--;
     return false;
   case 4:
     cpu->cycle++;
-    cpu->sp--;
     if (cpu->state == IC_6502_RESET)
     {
       // Fake-push status
@@ -72,6 +71,7 @@ bool run_break(ic_6502_registers *cpu, struct ic_6502_bus *bus)
     {
       bus->write(bus->context, 0x100 + cpu->sp, cpu->status.raw & ~IC_6502_STATUS_B);
     }
+    cpu->sp--;
     cpu->status.i = 1;
     return false;
   case 5:
@@ -152,6 +152,49 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
     case CLV_IMP_b8:
       cpu->status.v = 0;
       return true;
+    case INY_IMP_c8:
+      cpu->y++;
+      update_status(&cpu->status, cpu->y);
+      return true;
+    case DEY_IMP_88:
+      cpu->y--;
+      update_status(&cpu->status, cpu->y);
+      return true;
+    case INX_IMP_e8:
+      cpu->x++;
+      update_status(&cpu->status, cpu->x);
+      return true;
+    case DEX_IMP_ca:
+      cpu->x--;
+      update_status(&cpu->status, cpu->x);
+      return true;
+    case TAX_IMP_aa:
+      cpu->x = cpu->a;
+      update_status(&cpu->status, cpu->x);
+      return true;
+    case TAY_IMP_a8:
+      cpu->y = cpu->a;
+      update_status(&cpu->status, cpu->y);
+      return true;
+    case TYA_IMP_98:
+      cpu->a = cpu->y;
+      update_status(&cpu->status, cpu->a);
+      return true;
+    case TXA_IMP_8a:
+      cpu->a = cpu->x;
+      update_status(&cpu->status, cpu->a);
+      return true;
+    case TSX_IMP_ba:
+      cpu->x = cpu->sp;
+      update_status(&cpu->status, cpu->x);
+      return true;
+    case TXS_IMP_9a:
+      cpu->sp = cpu->x;
+      return true;
+    case TAS_ABY_9b:
+      cpu->sp = cpu->a;
+      update_status(&cpu->status, cpu->sp);
+      return true;
 
     case PHA_IMP_48:
       cpu->operand = cpu->a;
@@ -164,9 +207,11 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
       return false;
     case PLA_IMP_68:
     case PLP_IMP_28:
-      cpu->operand = bus->read(bus->context, cpu->sp);
       cpu->sp++;
+      cpu->operand = bus->read(bus->context, 0x100 + cpu->sp);
       return false;
+    default:
+      break;
     }
     cpu->operand = bus->read(bus->context, cpu->pc);
     cpu->pc++;
@@ -197,17 +242,43 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
       update_status(&cpu->status, cpu->a);
       return true;
     case ADC_IMM_69:
+    {
       uint16_t result = cpu->a + cpu->operand + cpu->status.c;
       update_status(&cpu->status, result);
       cpu->status.c = (result & 0xff00) != 0;
       cpu->status.v = (~(cpu->a ^ cpu->operand) & (cpu->a ^ result) & 0x80) == 0x80;
       cpu->a = result;
+    }
+      return true;
+    case SBC_IMM_e9:
+    {
+      cpu->operand = (uint8_t)~cpu->operand;
+      uint16_t result = cpu->a + cpu->operand + cpu->status.c;
+      update_status(&cpu->status, result);
+      cpu->status.c = (result & 0xff00) != 0;
+      cpu->status.v = (~(cpu->a ^ cpu->operand) & (cpu->a ^ result) & 0x80) == 0x80;
+      cpu->a = result;
+    }
       return true;
     case CMP_IMM_c9:
     {
       uint8_t cmp = cpu->a - cpu->operand;
       update_status(&cpu->status, cmp);
       cpu->status.c = cpu->a >= cpu->operand;
+    }
+      return true;
+    case CPY_IMM_c0:
+    {
+      uint8_t cmp = cpu->y - cpu->operand;
+      update_status(&cpu->status, cmp);
+      cpu->status.c = cpu->y >= cpu->operand;
+    }
+      return true;
+    case CPX_IMM_e0:
+    {
+      uint8_t cmp = cpu->x - cpu->operand;
+      update_status(&cpu->status, cmp);
+      cpu->status.c = cpu->x >= cpu->operand;
     }
       return true;
     case BNE_REL_d0:
@@ -258,7 +329,10 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
         return true;
       }
       break;
+    default:
+      break;
     }
+
     return false;
 
   case 2:
@@ -294,12 +368,14 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
       return true;
     case PHA_IMP_48:
     case PHP_IMP_08:
+      bus->write(bus->context, 0x100 + cpu->sp, cpu->operand & 0xff);
       cpu->sp--;
-      bus->write(bus->context, cpu->sp, cpu->operand & 0xff);
       return true;
     case PLA_IMP_68:
     case PLP_IMP_28:
       return false;
+    default:
+      break;
     }
 
     cpu->operand |= bus->read(bus->context, cpu->pc) << 8;
@@ -317,12 +393,12 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
     switch (cpu->instruction)
     {
     case JSR_ABS_20:
+      bus->write(bus->context, 0x100 + cpu->sp, cpu->pc >> 8);
       cpu->sp--;
-      bus->write(bus->context, cpu->sp, cpu->pc >> 8);
       break;
     case RTS_IMP_60:
-      cpu->operand = bus->read(bus->context, cpu->sp) & 0xff;
       cpu->sp++;
+      cpu->operand = bus->read(bus->context, 0x100 + cpu->sp) & 0xff;
       break;
     case PLA_IMP_68:
       cpu->a = cpu->operand;
@@ -333,6 +409,24 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
       cpu->status.b = 0;
       cpu->status._ = 1;
       return true;
+    case STX_ABS_8e:
+      bus->write(bus->context, cpu->operand, cpu->x);
+      return true;
+    case LDX_ABS_ae:
+      cpu->x = bus->read(bus->context, cpu->operand);
+      update_status(&cpu->status, cpu->x);
+      return true;
+    case LDA_ABS_ad:
+      cpu->a = bus->read(bus->context, cpu->operand);
+      update_status(&cpu->status, cpu->a);
+      return true;
+    case LDY_ABS_ac:
+      cpu->y = bus->read(bus->context, cpu->operand);
+      update_status(&cpu->status, cpu->y);
+      return true;
+
+    default:
+      break;
     }
     return false;
 
@@ -341,12 +435,14 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
     switch (cpu->instruction)
     {
     case JSR_ABS_20:
+      bus->write(bus->context, 0x100 + cpu->sp, cpu->pc & 0xff);
       cpu->sp--;
-      bus->write(bus->context, cpu->sp, cpu->pc & 0xff);
       break;
     case RTS_IMP_60:
-      cpu->operand |= bus->read(bus->context, cpu->sp) << 8;
       cpu->sp++;
+      cpu->operand |= bus->read(bus->context, 0x100 + cpu->sp) << 8;
+      break;
+    default:
       break;
     }
     return false;
@@ -359,6 +455,8 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
     case RTS_IMP_60:
       cpu->pc = cpu->operand;
       return true;
+    default:
+      break;
     }
     return false;
 
