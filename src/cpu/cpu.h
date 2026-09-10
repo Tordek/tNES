@@ -318,6 +318,7 @@ typedef struct ic_6502_registers
   int cycle;
   enum ic_6503_instruction_enum instruction;
   uint16_t operand;
+  uint16_t address;
 } ic_6502_registers;
 
 /**
