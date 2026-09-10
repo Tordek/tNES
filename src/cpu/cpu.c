@@ -156,20 +156,10 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
     // Implied operand.
   case ASL_IMP_0a:
   case BRK_IMP_00:
-    break;
   case CLC_IMP_18:
-    cpu->status.c = 0;
-    return true;
   case CLD_IMP_d8:
-    cpu->status.d = 0;
-    return true;
   case CLI_IMP_58:
-    cpu->status.i = 0;
-    return true;
   case CLV_IMP_b8:
-    cpu->status.v = 0;
-    return true;
-
   case DEX_IMP_ca:
   case DEY_IMP_88:
   case INX_IMP_e8:
@@ -545,9 +535,17 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
     branch_condition = cpu->status.v;
     break;
   case CLC_IMP_18:
+    cpu->status.c = 0;
+    return true;
   case CLD_IMP_d8:
+    cpu->status.d = 0;
+    return true;
   case CLI_IMP_58:
+    cpu->status.i = 0;
+    return true;
   case CLV_IMP_b8:
+    cpu->status.v = 0;
+    return true;
   case CMP_ABS_cd:
   case CMP_ABX_dd:
   case CMP_ABY_d9:
