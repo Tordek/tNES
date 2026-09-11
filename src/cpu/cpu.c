@@ -309,6 +309,22 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
       break;
     }
     break;
+  case STA_ABS_8d:
+  case STX_ABS_8e:
+  case STY_ABS_8c:
+    switch (cpu->cycle)
+    {
+    case 2:
+      cpu->address = bus->read(bus->context, cpu->pc++);
+      return false;
+    case 3:
+      cpu->address |= bus->read(bus->context, cpu->pc++) << 8;
+      return false;
+    case 4:
+      // Waste a cycle?
+      break;
+    }
+    break;
 
   // Absolute
   case ADC_ABS_6d:
@@ -338,9 +354,6 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
   case SBC_ABS_ed:
   case SLO_ABS_0f:
   case SRE_ABS_4f:
-  case STA_ABS_8d:
-  case STX_ABS_8e:
-  case STY_ABS_8c:
     switch (cpu->cycle)
     {
     case 2:
@@ -356,7 +369,8 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
       break;
     }
     break;
-    // Abs+x
+
+  // Abs+x
   case ADC_ABX_7d:
   case AND_ABX_3d:
   case ASL_ABX_1e:
@@ -478,11 +492,20 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
   case ADC_IZY_71:
   case ADC_ZPG_65:
   case ADC_ZPX_75:
+  {
+    uint16_t result = cpu->operand + cpu->a + cpu->status.c;
+
+    cpu->status.c = result > 0xff;
+    cpu->status.v = (~(cpu->a ^ cpu->operand) & (cpu->a ^ result) & 0x80) == 0x80;
+    cpu->operand = result;
+  }
+  break;
   case AHX_ABY_9f:
   case AHX_IZY_93:
   case ALR_IMM_4b:
   case ANC_IMM_0b:
   case ANC_IMM_2b:
+    break;
   case AND_ABS_2d:
   case AND_ABX_3d:
   case AND_ABY_39:
@@ -491,6 +514,9 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
   case AND_IZY_31:
   case AND_ZPG_25:
   case AND_ZPX_35:
+    cpu->operand &= cpu->a;
+    break;
+
   case ARR_IMM_6b:
   case ASL_ABS_0e:
   case ASL_ABX_1e:
@@ -554,12 +580,27 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
   case CMP_IZY_d1:
   case CMP_ZPG_c5:
   case CMP_ZPX_d5:
+  {
+    cpu->status.c = cpu->a >= cpu->operand;
+    update_status(&cpu->status, cpu->a - cpu->operand);
+  }
+  break;
   case CPX_ABS_ec:
   case CPX_IMM_e0:
   case CPX_ZPG_e4:
+  {
+    cpu->status.c = cpu->x >= cpu->operand;
+    update_status(&cpu->status, cpu->x - cpu->operand);
+  }
+  break;
   case CPY_ABS_cc:
   case CPY_IMM_c0:
   case CPY_ZPG_c4:
+  {
+    cpu->status.c = cpu->y >= cpu->operand;
+    update_status(&cpu->status, cpu->y - cpu->operand);
+  }
+  break;
   case DCP_ABS_cf:
   case DCP_ABX_df:
   case DCP_ABY_db:
@@ -571,8 +612,13 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
   case DEC_ABX_de:
   case DEC_ZPG_c6:
   case DEC_ZPX_d6:
+    break;
   case DEX_IMP_ca:
+    cpu->operand = cpu->x - 1;
+    break;
   case DEY_IMP_88:
+    cpu->operand = cpu->y - 1;
+    break;
   case EOR_ABS_4d:
   case EOR_ABX_5d:
   case EOR_ABY_59:
@@ -581,12 +627,20 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
   case EOR_IZY_51:
   case EOR_ZPG_45:
   case EOR_ZPX_55:
+    cpu->operand ^= cpu->a;
+    break;
   case INC_ABS_ee:
   case INC_ABX_fe:
   case INC_ZPG_e6:
   case INC_ZPX_f6:
+    cpu->operand = cpu->operand + 1;
+    break;
   case INX_IMP_e8:
+    cpu->operand = cpu->x + 1;
+    break;
   case INY_IMP_c8:
+    cpu->operand = cpu->y + 1;
+    break;
   case ISC_ABS_ef:
   case ISC_ABX_ff:
   case ISC_ABY_fb:
@@ -668,6 +722,7 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
   case NOP_ZPX_74:
   case NOP_ZPX_d4:
   case NOP_ZPX_f4:
+    break;
   case ORA_ABS_0d:
   case ORA_ABX_1d:
   case ORA_ABY_19:
@@ -676,6 +731,7 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
   case ORA_IZY_11:
   case ORA_ZPG_05:
   case ORA_ZPX_15:
+    cpu->operand |= cpu->a;
     break;
   case PHA_IMP_48:
     cpu->operand = cpu->a;
@@ -700,6 +756,19 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
     }
     break;
   case PLP_IMP_28:
+    if (cpu->cycle == 2)
+    {
+      return false;
+    }
+    else if (cpu->cycle == 3)
+    {
+      union ic_6502_status s = {.raw = bus->read(bus->context, 0x100 + ++cpu->sp)};
+      s.b = 0;
+      s._ = 1;
+      cpu->operand = s.raw;
+      return false;
+    }
+    break;
   case RLA_ABS_2f:
   case RLA_ABX_3f:
   case RLA_ABY_3b:
@@ -745,6 +814,7 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
   case SAX_IZX_83:
   case SAX_ZPG_87:
   case SAX_ZPY_97:
+    break;
   case SBC_ABS_ed:
   case SBC_ABX_fd:
   case SBC_ABY_f9:
@@ -754,7 +824,14 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
   case SBC_IZY_f1:
   case SBC_ZPG_e5:
   case SBC_ZPX_f5:
-    break;
+  {
+    uint16_t result = cpu->a + (uint8_t)~cpu->operand + cpu->status.c;
+    cpu->status.c = result > 0xff;
+    cpu->status.v = (~(cpu->a ^ ~cpu->operand) & (cpu->a ^ result) & 0x80) > 0;
+    // printf("%d - %d = %d (v: %d)\n", cpu->a, cpu->operand, result, cpu->status.v);
+    cpu->operand = (uint8_t)result;
+  }
+  break;
   case SEC_IMP_38:
     cpu->status.c = 1;
     return true;
@@ -793,13 +870,28 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
   case STY_ABS_8c:
   case STY_ZPG_84:
   case STY_ZPX_94:
+    break;
   case TAS_ABY_9b:
+    cpu->operand = cpu->a;
+    break;
   case TAX_IMP_aa:
+    cpu->operand = cpu->a;
+    break;
   case TAY_IMP_a8:
+    cpu->operand = cpu->a;
+    break;
   case TSX_IMP_ba:
+    cpu->operand = cpu->sp;
+    break;
   case TXA_IMP_8a:
+    cpu->operand = cpu->x;
+    break;
   case TXS_IMP_9a:
+    cpu->operand = cpu->x;
+    break;
   case TYA_IMP_98:
+    cpu->operand = cpu->y;
+    break;
   case XAA_IMM_8b:
     break;
   }
@@ -860,6 +952,49 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
   case LDA_ZPG_a5:
   case LDA_ZPX_b5:
   case PLA_IMP_68:
+  case AND_ABS_2d:
+  case AND_ABX_3d:
+  case AND_ABY_39:
+  case AND_IMM_29:
+  case AND_IZX_21:
+  case AND_IZY_31:
+  case AND_ZPG_25:
+  case AND_ZPX_35:
+  case ORA_ABS_0d:
+  case ORA_ABX_1d:
+  case ORA_ABY_19:
+  case ORA_IMM_09:
+  case ORA_IZX_01:
+  case ORA_IZY_11:
+  case ORA_ZPG_05:
+  case ORA_ZPX_15:
+  case EOR_ABS_4d:
+  case EOR_ABX_5d:
+  case EOR_ABY_59:
+  case EOR_IMM_49:
+  case EOR_IZX_41:
+  case EOR_IZY_51:
+  case EOR_ZPG_45:
+  case EOR_ZPX_55:
+  case ADC_ABS_6d:
+  case ADC_ABX_7d:
+  case ADC_ABY_79:
+  case ADC_IMM_69:
+  case ADC_IZX_61:
+  case ADC_IZY_71:
+  case ADC_ZPG_65:
+  case ADC_ZPX_75:
+  case SBC_ABS_ed:
+  case SBC_ABX_fd:
+  case SBC_ABY_f9:
+  case SBC_IMM_e9:
+  case SBC_IMM_eb:
+  case SBC_IZX_e1:
+  case SBC_IZY_f1:
+  case SBC_ZPG_e5:
+  case SBC_ZPX_f5:
+  case TXA_IMP_8a:
+  case TYA_IMP_98:
     cpu->a = cpu->operand;
     update_status(&cpu->status, cpu->a);
     return true;
@@ -869,6 +1004,10 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
   case LDX_IMM_a2:
   case LDX_ZPG_a6:
   case LDX_ZPY_b6:
+  case INX_IMP_e8:
+  case DEX_IMP_ca:
+  case TAX_IMP_aa:
+  case TSX_IMP_ba:
     cpu->x = cpu->operand;
     update_status(&cpu->status, cpu->x);
     return true;
@@ -878,6 +1017,9 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
   case LDY_IMM_a0:
   case LDY_ZPG_a4:
   case LDY_ZPX_b4:
+  case INY_IMP_c8:
+  case DEY_IMP_88:
+  case TAY_IMP_a8:
     cpu->y = cpu->operand;
     update_status(&cpu->status, cpu->y);
     return true;
@@ -895,7 +1037,17 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
   case STY_ABS_8c:
   case STY_ZPG_84:
   case STY_ZPX_94:
-    bus->write(bus->context, cpu->address, cpu->operand);
+    switch (cpu->cycle)
+    {
+    case 3:
+      bus->write(bus->context, cpu->address, cpu->operand);
+      return false;
+    case 4:
+      return true;
+    }
+  case TAS_ABY_9b:
+  case TXS_IMP_9a:
+    cpu->sp = cpu->operand;
     return true;
 
   case PHP_IMP_08:
@@ -909,6 +1061,9 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
     {
       return true;
     }
+  case PLP_IMP_28:
+    cpu->status.raw = cpu->operand;
+    return true;
 
   case JSR_ABS_20:
     switch (cpu->cycle)
