@@ -332,3 +332,66 @@ void nmi(ic_6502_registers *cpu);
  * unlike NMI.
  */
 void tick_cpu(ic_6502_registers *cpu, struct ic_6502_bus *bus_ops, bool irq, bool reset);
+
+enum ui_address
+{
+  UI_ADDR_PC_INC,
+  UI_ADDR_PC,
+  UI_ADDR_TEMP,
+  UI_ADDR_SP,
+  UI_ADDR_SP_INC,
+};
+
+enum ui_register
+{
+  UI_REG_NONE,
+  UI_REG_INSTRUCTION,
+  UI_REG_P,
+  UI_REG_A,
+  UI_REG_X,
+  UI_REG_Y,
+  UI_REG_TMP_L,
+  UI_REG_TMP_H,
+  UI_REG_PC_HI,
+  UI_REG_PC_LO,
+};
+
+enum ui_alu_op
+{
+  UI_ALU_NONE,
+  UI_ALU_ADC,
+  UI_ALU_SBC,
+  UI_ALU_AND,
+  UI_ALU_ORA,
+  UI_ALU_EOR,
+  UI_ALU_LOGIC,
+  UI_ALU_CPY,
+  UI_ALU_CPX,
+  UI_ALU_CMP,
+  UI_ALU_INY,
+  UI_ALU_INX,
+  UI_ALU_DEY,
+  UI_ALU_DEX,
+  UI_ALU_INC_DEC,
+  UI_ALU_SHIFT,
+  UI_ALU_BRANCH_CHECK,
+  UI_ALU_BRANCH_TRY,
+  UI_ALU_BRANCH_JUMP,
+};
+
+enum ui_bus_action
+{
+  UI_BUS_READ,
+  UI_BUS_WRITE,
+};
+
+struct micro_instruction
+{
+  enum ui_bus_action action;
+  enum ui_address address;
+  enum ui_register reg;
+  enum ui_alu_op alu_op;
+  bool finished;
+};
+
+extern struct micro_instruction uinstructions[256][20];
