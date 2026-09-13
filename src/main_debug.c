@@ -721,6 +721,7 @@ int main(int argc, char *argv[])
   cpu.x = 0;
   cpu.y = 0;
   cpu.status.raw = 0x20;
+  cpu.instruction = 0;
   ppu.clock = 0;
   memset(machine.main_ram, 0, sizeof(machine.main_ram));
 
