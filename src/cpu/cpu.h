@@ -317,7 +317,8 @@ typedef struct ic_6502_registers
   enum ic_6502_state state;
   int cycle;
   enum ic_6503_instruction_enum instruction;
-  uint16_t operand;
+  uint8_t op;
+  uint8_t zp;
   uint16_t address;
 } ic_6502_registers;
 
@@ -337,6 +338,8 @@ enum ui_address
 {
   UI_ADDR_PC_INC,
   UI_ADDR_PC,
+  UI_ADDR_ZP,
+  UI_ADDR_ZP_PLUS_1,
   UI_ADDR_TEMP,
   UI_ADDR_SP,
   UI_ADDR_SP_INC,
@@ -350,8 +353,11 @@ enum ui_register
   UI_REG_A,
   UI_REG_X,
   UI_REG_Y,
-  UI_REG_TMP_L,
-  UI_REG_TMP_H,
+  UI_REG_SP,
+  UI_REG_TEMP_LO,
+  UI_REG_TEMP_HI,
+  UI_REG_ZP,
+  UI_REG_OP,
   UI_REG_PC_HI,
   UI_REG_PC_LO,
 };
@@ -372,7 +378,23 @@ enum ui_alu_op
   UI_ALU_INX,
   UI_ALU_DEY,
   UI_ALU_DEX,
-  UI_ALU_INC_DEC,
+  UI_ALU_Y,
+  UI_ALU_X,
+  UI_ALU_A,
+  UI_ALU_SP,
+  UI_ALU_LSRA,
+  UI_ALU_LSR,
+  UI_ALU_ASLA,
+  UI_ALU_ASL,
+  UI_ALU_ROLA,
+  UI_ALU_ROL,
+  UI_ALU_RORA,
+  UI_ALU_ROR,
+  UI_ALU_ADDX,
+  UI_ALU_RLA,
+  UI_ALU_RRA,
+  UI_ALU_INC,
+  UI_ALU_DEC,
   UI_ALU_SHIFT,
   UI_ALU_BRANCH_CHECK,
   UI_ALU_BRANCH_TRY,
