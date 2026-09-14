@@ -114,6 +114,9 @@ bool run_break(ic_6502_registers *cpu, struct ic_6502_bus *bus)
 bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
 {
     struct micro_instruction i = uinstructions[cpu->instruction][cpu->cycle++];
+    // Whether a branch was taken or a page overflowed,
+    // It needs to skip one more cycle.
+    bool page_jump = false;
 
     // Read.
     uint8_t value;
@@ -270,13 +273,13 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
         value = cpu->zp + cpu->x;
         break;
     case UI_ALU_TRY_ADDY:
+    {
+        if ((cpu->address) & 0xff + cpu->y > 0xff)
         {
-            if ((cpu->address) & 0xff + cpu->y > 0xff) {
-                // The address
-                return false;
-            }
+            page_jump = true;
         }
-        break;
+    }
+    break;
     case UI_ALU_ADDY:
         value = cpu->zp + cpu->x;
         break;
@@ -346,59 +349,51 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
         switch (cpu->instruction)
         {
         case BVS_REL_70:
-            if (!cpu->status.v)
+            if (cpu->status.v)
             {
-                // Bail, nothing to do.
-                return true;
+                page_jump = true;
             }
             break;
         case BVC_REL_50:
-            if (cpu->status.v)
+            if (!cpu->status.v)
             {
-                // Bail, nothing to do.
-                return true;
+                page_jump = true;
             }
             break;
         case BCS_REL_b0:
-            if (!cpu->status.c)
+            if (cpu->status.c)
             {
-                // Bail, nothing to do.
-                return true;
+                page_jump = true;
             }
             break;
         case BCC_REL_90:
-            if (cpu->status.c)
+            if (!cpu->status.c)
             {
-                // Bail, nothing to do.
-                return true;
+                page_jump = true;
             }
             break;
         case BEQ_REL_f0:
-            if (!cpu->status.z)
+            if (cpu->status.z)
             {
-                // Bail, nothing to do.
-                return true;
+                page_jump = true;
             }
             break;
         case BNE_REL_d0:
-            if (cpu->status.z)
+            if (!cpu->status.z)
             {
-                // Bail, nothing to do.
-                return true;
+                page_jump = true;
             }
             break;
         case BMI_REL_30:
-            if (!cpu->status.n)
+            if (cpu->status.n)
             {
-                // Bail, nothing to do.
-                return true;
+                page_jump = true;
             }
             break;
         case BPL_REL_10:
-            if (cpu->status.n)
+            if (!cpu->status.n)
             {
-                // Bail, nothing to do.
-                return true;
+                page_jump = true;
             }
             break;
 
@@ -415,20 +410,17 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
         if (add == overw)
         {
             cpu->pc = overw;
-            // Jumped fine
-            return true;
         }
         else
         {
-            // Forced jump
             cpu->address = overw;
+            page_jump = true;
         }
         break;
     }
     case UI_ALU_BRANCH_JUMP:
     {
         cpu->pc = cpu->address + 0x100;
-        return true;
     }
     }
 
@@ -500,7 +492,7 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
         }
     }
 
-    return i.finished;
+    return !page_jump && i.finished;
 }
 
 void tick_cpu(ic_6502_registers *cpu, struct ic_6502_bus *bus, bool irq, bool reset)
@@ -642,8 +634,8 @@ struct micro_instruction uinstructions[256][20] =
         },
         [BPL_REL_10] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_BRANCH_TRY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_BRANCH_TRY, .finished = true},
             {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_JUMP, .finished = true},
         },
         [ORA_IZY_11] = {
@@ -807,8 +799,8 @@ struct micro_instruction uinstructions[256][20] =
         },
         [BMI_REL_30] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_BRANCH_TRY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_BRANCH_TRY, .finished = true},
             {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_JUMP, .finished = true},
         },
         [AND_IZY_31] = {
@@ -970,8 +962,8 @@ struct micro_instruction uinstructions[256][20] =
         },
         [BVC_REL_50] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_BRANCH_TRY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_BRANCH_TRY, .finished = true},
             {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_JUMP, .finished = true},
         },
         [EOR_IZY_51] = {
@@ -1133,8 +1125,8 @@ struct micro_instruction uinstructions[256][20] =
         },
         [BVS_REL_70] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_BRANCH_TRY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_BRANCH_TRY, .finished = true},
             {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_JUMP, .finished = true},
         },
         [ADC_IZY_71] = {
@@ -1288,8 +1280,8 @@ struct micro_instruction uinstructions[256][20] =
         },
         [BCC_REL_90] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_BRANCH_TRY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_BRANCH_TRY, .finished = true},
             {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_JUMP, .finished = true},
         },
         [STA_IZY_91] = {
@@ -1443,8 +1435,8 @@ struct micro_instruction uinstructions[256][20] =
         },
         [BCS_REL_b0] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_BRANCH_TRY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_BRANCH_TRY, .finished = true},
             {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_JUMP, .finished = true},
         },
         [LDA_IZY_b1] = {
@@ -1606,8 +1598,8 @@ struct micro_instruction uinstructions[256][20] =
         },
         [BNE_REL_d0] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_BRANCH_TRY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_BRANCH_TRY, .finished = true},
             {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_JUMP, .finished = true},
         },
         [CMP_IZY_d1] = {
@@ -1765,8 +1757,8 @@ struct micro_instruction uinstructions[256][20] =
         },
         [BEQ_REL_f0] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_BRANCH_TRY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_BRANCH_TRY, .finished = true},
             {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_JUMP, .finished = true},
         },
         [SBC_IZY_f1] = {
