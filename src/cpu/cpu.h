@@ -320,7 +320,7 @@ typedef struct ic_6502_registers
   uint8_t op;
   uint8_t zp;
   uint16_t address;
-  uint16_t address_unfixed;
+  uint16_t address_latch;
   bool page_jump;
 } ic_6502_registers;
 
@@ -343,7 +343,7 @@ enum ui_address
   UI_ADDR_ZP,
   UI_ADDR_ZP_PLUS_1,
   UI_ADDR_TEMP,
-  UI_ADDR_TEMP_UNFIX,
+  UI_ADDR_TEMP_LATCH,
   UI_ADDR_SP,
   UI_ADDR_SP_INC,
 };
