@@ -114,9 +114,6 @@ bool run_break(ic_6502_registers *cpu, struct ic_6502_bus *bus)
 bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
 {
     struct micro_instruction i = uinstructions[cpu->instruction][cpu->cycle++];
-    // Whether a branch was taken or a page overflowed,
-    // It needs to skip one more cycle.
-    bool page_jump = false;
 
     // Read.
     uint8_t value;
@@ -136,8 +133,16 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
         case UI_ADDR_SP_INC:
             value = bus->read(bus->context, 0x100 + ++cpu->sp);
             break;
+        case UI_ADDR_TEMP_UNFIX:
+            value = bus->read(bus->context, cpu->address_unfixed);
+            if (cpu->address == cpu->address_unfixed)
+            {
+                cpu->page_jump = false;
+            }
+            break;
         case UI_ADDR_TEMP:
             value = bus->read(bus->context, cpu->address);
+            cpu->page_jump = false;
             break;
         case UI_ADDR_ZP:
             value = bus->read(bus->context, cpu->zp & 0xff);
@@ -272,17 +277,28 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
     case UI_ALU_ADDX:
         value = cpu->zp + cpu->x;
         break;
-    case UI_ALU_TRY_ADDY:
+    case UI_ALU_ADDY:
     {
-        if ((cpu->address) & 0xff + cpu->y > 0xff)
+        uint16_t add = cpu->address + cpu->y;
+        cpu->address_unfixed = (cpu->address & 0xff00) | ((cpu->address + cpu->y) & 0xff);
+        cpu->address = add;
+        if (add != cpu->address_unfixed)
         {
-            page_jump = true;
+            cpu->page_jump = true;
         }
     }
     break;
-    case UI_ALU_ADDY:
-        value = cpu->zp + cpu->x;
-        break;
+    case UI_ALU_INC_ADDR:
+    {
+        uint16_t add = cpu->address + 1;
+        cpu->address_unfixed = (cpu->address & 0xff00) | ((cpu->address + cpu->y) & 0xff);
+        cpu->address = add;
+        if (add != cpu->address_unfixed)
+        {
+            cpu->page_jump = true;
+        }
+    }
+    break;
 
     // TODO: Remove this, make ALU_SEC, ALU_CLC, etc.
     case UI_ALU_LOGIC:
@@ -351,49 +367,49 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
         case BVS_REL_70:
             if (cpu->status.v)
             {
-                page_jump = true;
+                cpu->page_jump = true;
             }
             break;
         case BVC_REL_50:
             if (!cpu->status.v)
             {
-                page_jump = true;
+                cpu->page_jump = true;
             }
             break;
         case BCS_REL_b0:
             if (cpu->status.c)
             {
-                page_jump = true;
+                cpu->page_jump = true;
             }
             break;
         case BCC_REL_90:
             if (!cpu->status.c)
             {
-                page_jump = true;
+                cpu->page_jump = true;
             }
             break;
         case BEQ_REL_f0:
             if (cpu->status.z)
             {
-                page_jump = true;
+                cpu->page_jump = true;
             }
             break;
         case BNE_REL_d0:
             if (!cpu->status.z)
             {
-                page_jump = true;
+                cpu->page_jump = true;
             }
             break;
         case BMI_REL_30:
             if (cpu->status.n)
             {
-                page_jump = true;
+                cpu->page_jump = true;
             }
             break;
         case BPL_REL_10:
             if (!cpu->status.n)
             {
-                page_jump = true;
+                cpu->page_jump = true;
             }
             break;
 
@@ -405,23 +421,20 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
     case UI_ALU_BRANCH_TRY:
     {
         uint16_t add = cpu->pc + cpu->zp;
-        uint16_t overw = (cpu->pc & 0xff00) | ((cpu->pc + cpu->zp) & 0xff);
-
-        if (add == overw)
+        cpu->pc = (cpu->pc & 0xff00) | ((cpu->pc + cpu->zp) & 0xff);
+        if (cpu->pc == add)
         {
-            cpu->pc = overw;
-        }
-        else
-        {
-            cpu->address = overw;
-            page_jump = true;
+            cpu->page_jump = false;
         }
         break;
     }
     case UI_ALU_BRANCH_JUMP:
     {
-        cpu->pc = cpu->address + 0x100;
+        cpu->pc = cpu->pc + 0x100;
+        cpu->page_jump = false;
     }
+    default:
+        break;
     }
 
     // Write
@@ -452,17 +465,24 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
             update_status(&cpu->status, value);
             break;
         case UI_REG_TEMP_LO:
+            cpu->address_unfixed = (cpu->address_unfixed & 0xff00) | value;
             cpu->address = (cpu->address & 0xff00) | value;
             break;
         case UI_REG_TEMP_HI:
+            cpu->address_unfixed = (cpu->address & 0x00ff) | value << 8;
             cpu->address = (cpu->address & 0x00ff) | value << 8;
+            if (cpu->page_jump)
+            {
+                cpu->address += 0x100;
+            }
             break;
         case UI_REG_PC_LO:
+            cpu->address_unfixed = (cpu->address_unfixed & 0xff00) | value;
             cpu->pc = value;
             break;
         case UI_REG_PC_HI:
-            cpu->address = (cpu->address & 0x00ff) | value << 8;
-            cpu->pc = cpu->address;
+            cpu->address_unfixed = (cpu->address_unfixed & 0x00ff) | value << 8;
+            cpu->pc = cpu->address_unfixed;
             break;
         case UI_REG_SP:
             cpu->sp = value;
@@ -481,18 +501,25 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
         case UI_ADDR_SP_INC:
             bus->write(bus->context, 0x100 + cpu->sp--, value);
             break;
+        case UI_ADDR_TEMP_UNFIX:
+            bus->write(bus->context, cpu->address_unfixed, value);
+            if (cpu->address == cpu->address_unfixed)
+            {
+                cpu->page_jump = false;
+            }
+            break;
         case UI_ADDR_TEMP:
             bus->write(bus->context, cpu->address, value);
             break;
         case UI_ADDR_ZP:
-            bus->write(bus->context, cpu->zp & 0xff, value);
+            bus->write(bus->context, cpu->zp, value);
             break;
         default:
             break;
         }
     }
 
-    return !page_jump && i.finished;
+    return !cpu->page_jump && i.finished;
 }
 
 void tick_cpu(ic_6502_registers *cpu, struct ic_6502_bus *bus, bool irq, bool reset)
@@ -503,6 +530,7 @@ void tick_cpu(ic_6502_registers *cpu, struct ic_6502_bus *bus, bool irq, bool re
         cpu->state = IC_6502_RESET;
         cpu->cycle = 0;
         cpu->instruction = 0;
+        cpu->page_jump = false;
     }
 
     bool done = true;
@@ -529,6 +557,7 @@ void tick_cpu(ic_6502_registers *cpu, struct ic_6502_bus *bus, bool irq, bool re
     }
 
     cpu->cycle = 0;
+    cpu->page_jump = false;
     if (cpu->nmi_requested)
     {
         cpu->state = IC_6502_NMI;
@@ -640,7 +669,11 @@ struct micro_instruction uinstructions[256][20] =
         },
         [ORA_IZY_11] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP_PLUS_1, .alu_op = UI_ALU_ADDY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP_UNFIX, .alu_op = UI_ALU_ORA, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ORA, .finished = true},
         },
         [KIL_IMP_12] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -805,7 +838,11 @@ struct micro_instruction uinstructions[256][20] =
         },
         [AND_IZY_31] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP_PLUS_1, .alu_op = UI_ALU_ADDY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP_UNFIX, .alu_op = UI_ALU_AND, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_AND, .finished = true},
         },
         [KIL_IMP_32] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -872,10 +909,10 @@ struct micro_instruction uinstructions[256][20] =
         [RTI_IMP_40] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_SP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_SP, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_P, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_SP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_NONE, .finished = true},
         },
         [EOR_IZX_41] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -968,7 +1005,11 @@ struct micro_instruction uinstructions[256][20] =
         },
         [EOR_IZY_51] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP_PLUS_1, .alu_op = UI_ALU_ADDY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP_UNFIX, .alu_op = UI_ALU_EOR, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_EOR, .finished = true},
         },
         [KIL_IMP_52] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1102,7 +1143,10 @@ struct micro_instruction uinstructions[256][20] =
         },
         [JMP_IND_6c] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_PC_LO, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_INC_ADDR, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_PC_HI, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
         },
         [ADC_ABS_6d] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1131,7 +1175,11 @@ struct micro_instruction uinstructions[256][20] =
         },
         [ADC_IZY_71] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP_PLUS_1, .alu_op = UI_ALU_ADDY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP_UNFIX, .alu_op = UI_ALU_ADC, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ADC, .finished = true},
         },
         [KIL_IMP_72] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1286,7 +1334,11 @@ struct micro_instruction uinstructions[256][20] =
         },
         [STA_IZY_91] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP_PLUS_1, .alu_op = UI_ALU_ADDY, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_A, .address = UI_ADDR_TEMP_UNFIX, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
         },
         [KIL_IMP_92] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1443,9 +1495,9 @@ struct micro_instruction uinstructions[256][20] =
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP_PLUS_1, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_TRY_ADDY, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ADDY, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP_PLUS_1, .alu_op = UI_ALU_ADDY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP_UNFIX, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
         },
         [KIL_IMP_b2] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1604,7 +1656,11 @@ struct micro_instruction uinstructions[256][20] =
         },
         [CMP_IZY_d1] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP_PLUS_1, .alu_op = UI_ALU_ADDY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_TEMP_UNFIX, .alu_op = UI_ALU_CMP, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_CMP, .finished = true},
         },
         [KIL_IMP_d2] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1763,7 +1819,11 @@ struct micro_instruction uinstructions[256][20] =
         },
         [SBC_IZY_f1] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP_PLUS_1, .alu_op = UI_ALU_ADDY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP_UNFIX, .alu_op = UI_ALU_SBC, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SBC, .finished = true},
         },
         [KIL_IMP_f2] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},

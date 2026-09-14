@@ -606,8 +606,7 @@ void print_status(struct tnes_machine *machine)
     uint16_t addr = hi << 8 | lo;
 
     uint16_t val = cpu_bus_read(machine, addr);
-    lo++;
-    val |= cpu_bus_read(machine, hi << 8 | lo) << 8;
+    val |= cpu_bus_read(machine, hi << 8 | ((lo + 1) & 0xff)) << 8;
 
     printf(" %02X %02X %02X %s ($%04X) = %04X              ", opcode, lo, hi, names[opcode], addr, val);
   }
@@ -722,6 +721,7 @@ int main(int argc, char *argv[])
   cpu.y = 0;
   cpu.status.raw = 0x20;
   cpu.instruction = 0;
+  cpu.page_jump = 0;
   ppu.clock = 0;
   memset(machine.main_ram, 0, sizeof(machine.main_ram));
 
