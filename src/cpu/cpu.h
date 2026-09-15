@@ -321,6 +321,7 @@ typedef struct ic_6502_registers
   uint8_t zp;
   uint16_t address;
   uint16_t address_latch;
+  uint16_t pc_latch;
   bool page_jump;
 } ic_6502_registers;
 
@@ -364,6 +365,7 @@ enum ui_register
   UI_REG_OP,
   UI_REG_PC_HI,
   UI_REG_PC_LO,
+  UI_REG_PC_LATCH_LO,
 };
 
 enum ui_alu_op

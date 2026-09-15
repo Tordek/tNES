@@ -732,8 +732,7 @@ int main(int argc, char *argv[])
   } while (machine.cpu->cycle != 0);
   cpu.pc = 0xc000;
 
-  // int max_cycles = 1000000;
-  while (machine.cycles < 10000)
+  while (machine.cycles < 26555)
   {
     print_status(&machine);
     do
