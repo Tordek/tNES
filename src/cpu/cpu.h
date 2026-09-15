@@ -338,12 +338,13 @@ void tick_cpu(ic_6502_registers *cpu, struct ic_6502_bus *bus_ops, bool irq, boo
 
 enum ui_address
 {
-  UI_ADDR_PC_INC,
   UI_ADDR_PC,
+  UI_ADDR_PC_INC,
   UI_ADDR_ZP,
-  UI_ADDR_ZP_PLUS_1,
+  UI_ADDR_ZP_INC,
   UI_ADDR_TEMP,
-  UI_ADDR_TEMP_LATCH,
+  UI_ADDR_TEMP_INC,
+  UI_ADDR_LATCH,
   UI_ADDR_SP,
   UI_ADDR_SP_INC,
 };
@@ -399,7 +400,6 @@ enum ui_alu_op
   UI_ALU_INC,
   UI_ALU_DEC,
   UI_ALU_ADDY,
-  UI_ALU_INC_ADDR,
   UI_ALU_SHIFT,
   UI_ALU_BRANCH_CHECK,
   UI_ALU_BRANCH_TRY,
