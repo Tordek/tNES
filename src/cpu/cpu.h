@@ -306,16 +306,15 @@ union ic_6502_status
 
 typedef struct ic_6502_registers
 {
-  uint16_t pc;
   uint8_t a;
   uint8_t x;
   uint8_t y;
   union ic_6502_status status;
   uint8_t sp;
+  uint16_t pc;
 
-  bool nmi_requested;
-  enum ic_6502_state state;
   int cycle;
+  enum ic_6502_state state;
   enum ic_6503_instruction_enum instruction;
   uint8_t op;
   uint8_t zp;
@@ -323,6 +322,7 @@ typedef struct ic_6502_registers
   uint16_t address_latch;
   uint16_t pc_latch;
   bool page_jump;
+  bool nmi_requested;
 } ic_6502_registers;
 
 /**
@@ -376,7 +376,6 @@ enum ui_alu_op
   UI_ALU_AND,
   UI_ALU_ORA,
   UI_ALU_EOR,
-  UI_ALU_LOGIC,
   UI_ALU_CPY,
   UI_ALU_CPX,
   UI_ALU_CMP,
@@ -406,6 +405,16 @@ enum ui_alu_op
   UI_ALU_BRANCH_CHECK,
   UI_ALU_BRANCH_TRY,
   UI_ALU_BRANCH_JUMP,
+  UI_ALU_SEC,
+  UI_ALU_CLC,
+  UI_ALU_SEI,
+  UI_ALU_CLI,
+  UI_ALU_SED,
+  UI_ALU_CLD,
+  UI_ALU_CLV,
+  UI_ALU_BIT,
+  UI_ALU_PHP,
+  UI_ALU_PLP
 };
 
 enum ui_bus_action

@@ -267,291 +267,366 @@ char const names[256][5] = {
     "*ISB",
 };
 
+enum addressing_mode
+{
+  ADR_IMP,
+  ADR_IMM,
+  ADR_ACC,
+  ADR_ABS,
+  ADR_ABSJ,
+  ADR_ZP0,
+  ADR_ZPY,
+  ADR_REL,
+  ADR_ZPX,
+  ADR_IND,
+  ADR_ABX,
+  ADR_ABY,
+  ADR_IZX,
+  ADR_IZY,
+};
+
+enum addressing_mode addressing_mode[256] = {
+    [0x00] = ADR_IMP,
+    [0x01] = ADR_IZX,
+    [0x02] = ADR_IMM,
+    [0x03] = ADR_IZX,
+    [0x04] = ADR_ZP0,
+    [0x05] = ADR_ZP0,
+    [0x06] = ADR_ZP0,
+    [0x07] = ADR_ZP0,
+    [0x08] = ADR_IMP,
+    [0x09] = ADR_IMM,
+    [0x0a] = ADR_ACC,
+    [0x0b] = ADR_IMM,
+    [0x0c] = ADR_ABS,
+    [0x0d] = ADR_ABS,
+    [0x0e] = ADR_ABS,
+    [0x0f] = ADR_ABS,
+    [0x10] = ADR_REL,
+    [0x11] = ADR_IZY,
+    [0x12] = ADR_IMM,
+    [0x13] = ADR_IZY,
+    [0x14] = ADR_ZPX,
+    [0x15] = ADR_ZPX,
+    [0x16] = ADR_ZPX,
+    [0x17] = ADR_ZPX,
+    [0x18] = ADR_IMP,
+    [0x19] = ADR_ABY,
+    [0x1a] = ADR_IMP,
+    [0x1b] = ADR_ABY,
+    [0x1c] = ADR_ABX,
+    [0x1d] = ADR_ABX,
+    [0x1e] = ADR_ABX,
+    [0x1f] = ADR_ABX,
+    [0x20] = ADR_ABSJ,
+    [0x21] = ADR_IZX,
+    [0x22] = ADR_IMM,
+    [0x23] = ADR_IZX,
+    [0x24] = ADR_ZP0,
+    [0x25] = ADR_ZP0,
+    [0x26] = ADR_ZP0,
+    [0x27] = ADR_ZP0,
+    [0x28] = ADR_IMP,
+    [0x29] = ADR_IMM,
+    [0x2a] = ADR_ACC,
+    [0x2b] = ADR_IMM,
+    [0x2c] = ADR_ABS,
+    [0x2d] = ADR_ABS,
+    [0x2e] = ADR_ABS,
+    [0x2f] = ADR_ABS,
+    [0x30] = ADR_REL,
+    [0x31] = ADR_IZY,
+    [0x32] = ADR_IMM,
+    [0x33] = ADR_IZY,
+    [0x34] = ADR_ZPX,
+    [0x35] = ADR_ZPX,
+    [0x36] = ADR_ZPX,
+    [0x37] = ADR_ZPX,
+    [0x38] = ADR_IMP,
+    [0x39] = ADR_ABY,
+    [0x3a] = ADR_IMP,
+    [0x3b] = ADR_ABY,
+    [0x3c] = ADR_ABX,
+    [0x3d] = ADR_ABX,
+    [0x3e] = ADR_ABX,
+    [0x3f] = ADR_ABX,
+    [0x40] = ADR_IMP,
+    [0x41] = ADR_IZX,
+    [0x42] = ADR_IMM,
+    [0x43] = ADR_IZX,
+    [0x44] = ADR_ZP0,
+    [0x45] = ADR_ZP0,
+    [0x46] = ADR_ZP0,
+    [0x47] = ADR_ZP0,
+    [0x48] = ADR_IMP,
+    [0x49] = ADR_IMM,
+    [0x4a] = ADR_ACC,
+    [0x4b] = ADR_IMM,
+    [0x4c] = ADR_ABSJ,
+    [0x4d] = ADR_ABS,
+    [0x4e] = ADR_ABS,
+    [0x4f] = ADR_ABS,
+    [0x50] = ADR_REL,
+    [0x51] = ADR_IZY,
+    [0x52] = ADR_IMM,
+    [0x53] = ADR_IZY,
+    [0x54] = ADR_ZPX,
+    [0x55] = ADR_ZPX,
+    [0x56] = ADR_ZPX,
+    [0x57] = ADR_ZPX,
+    [0x58] = ADR_IMP,
+    [0x59] = ADR_ABY,
+    [0x5a] = ADR_IMP,
+    [0x5b] = ADR_ABY,
+    [0x5c] = ADR_ABX,
+    [0x5d] = ADR_ABX,
+    [0x5e] = ADR_ABX,
+    [0x5f] = ADR_ABX,
+    [0x60] = ADR_IMP,
+    [0x61] = ADR_IZX,
+    [0x62] = ADR_IMM,
+    [0x63] = ADR_IZX,
+    [0x64] = ADR_ZP0,
+    [0x65] = ADR_ZP0,
+    [0x66] = ADR_ZP0,
+    [0x67] = ADR_ZP0,
+    [0x68] = ADR_IMP,
+    [0x69] = ADR_IMM,
+    [0x6a] = ADR_ACC,
+    [0x6b] = ADR_IMM,
+    [0x6c] = ADR_IND,
+    [0x6d] = ADR_ABS,
+    [0x6e] = ADR_ABS,
+    [0x6f] = ADR_ABS,
+    [0x70] = ADR_REL,
+    [0x71] = ADR_IZY,
+    [0x72] = ADR_IMM,
+    [0x73] = ADR_IZY,
+    [0x74] = ADR_ZPX,
+    [0x75] = ADR_ZPX,
+    [0x76] = ADR_ZPX,
+    [0x77] = ADR_ZPX,
+    [0x78] = ADR_IMP,
+    [0x79] = ADR_ABY,
+    [0x7a] = ADR_IMP,
+    [0x7b] = ADR_ABY,
+    [0x7c] = ADR_ABX,
+    [0x7d] = ADR_ABX,
+    [0x7e] = ADR_ABX,
+    [0x7f] = ADR_ABX,
+    [0x80] = ADR_IMM,
+    [0x81] = ADR_IZX,
+    [0x82] = ADR_IMP,
+    [0x83] = ADR_IZX,
+    [0x84] = ADR_ZP0,
+    [0x85] = ADR_ZP0,
+    [0x86] = ADR_ZP0,
+    [0x87] = ADR_ZP0,
+    [0x88] = ADR_IMP,
+    [0x89] = ADR_IMP,
+    [0x8a] = ADR_IMP,
+    [0x8b] = ADR_IMM,
+    [0x8c] = ADR_ABS,
+    [0x8d] = ADR_ABS,
+    [0x8e] = ADR_ABS,
+    [0x8f] = ADR_ABS,
+    [0x90] = ADR_REL,
+    [0x91] = ADR_IZY,
+    [0x92] = ADR_IMM,
+    [0x93] = ADR_IZY,
+    [0x94] = ADR_ZPX,
+    [0x95] = ADR_ZPX,
+    [0x96] = ADR_ZPY,
+    [0x97] = ADR_ZPY,
+    [0x98] = ADR_IMP,
+    [0x99] = ADR_ABY,
+    [0x9a] = ADR_IMP,
+    [0x9b] = ADR_ABY,
+    [0x9c] = ADR_ABX,
+    [0x9d] = ADR_ABX,
+    [0x9e] = ADR_ABY,
+    [0x9f] = ADR_ABY,
+    [0xa0] = ADR_IMM,
+    [0xa1] = ADR_IZX,
+    [0xa2] = ADR_IMM,
+    [0xa3] = ADR_IZX,
+    [0xa4] = ADR_ZP0,
+    [0xa5] = ADR_ZP0,
+    [0xa6] = ADR_ZP0,
+    [0xa7] = ADR_ZP0,
+    [0xa8] = ADR_IMP,
+    [0xa9] = ADR_IMM,
+    [0xaa] = ADR_IMP,
+    [0xab] = ADR_IMM,
+    [0xac] = ADR_ABS,
+    [0xad] = ADR_ABS,
+    [0xae] = ADR_ABS,
+    [0xaf] = ADR_ABS,
+    [0xb0] = ADR_REL,
+    [0xb1] = ADR_IZY,
+    [0xb2] = ADR_IMM,
+    [0xb3] = ADR_IZY,
+    [0xb4] = ADR_ZPX,
+    [0xb5] = ADR_ZPX,
+    [0xb6] = ADR_ZPY,
+    [0xb7] = ADR_ZPY,
+    [0xb8] = ADR_IMP,
+    [0xb9] = ADR_ABY,
+    [0xba] = ADR_IMP,
+    [0xbb] = ADR_ABY,
+    [0xbc] = ADR_ABX,
+    [0xbd] = ADR_ABX,
+    [0xbe] = ADR_ABY,
+    [0xbf] = ADR_ABY,
+    [0xc0] = ADR_IMM,
+    [0xc1] = ADR_IZX,
+    [0xc2] = ADR_IMP,
+    [0xc3] = ADR_IZX,
+    [0xc4] = ADR_ZP0,
+    [0xc5] = ADR_ZP0,
+    [0xc6] = ADR_ZP0,
+    [0xc7] = ADR_ZP0,
+    [0xc8] = ADR_IMP,
+    [0xc9] = ADR_IMM,
+    [0xca] = ADR_IMP,
+    [0xcb] = ADR_IMM,
+    [0xcc] = ADR_ABS,
+    [0xcd] = ADR_ABS,
+    [0xce] = ADR_ABS,
+    [0xcf] = ADR_ABS,
+    [0xd0] = ADR_REL,
+    [0xd1] = ADR_IZY,
+    [0xd2] = ADR_IMM,
+    [0xd3] = ADR_IZY,
+    [0xd4] = ADR_ZPX,
+    [0xd5] = ADR_ZPX,
+    [0xd6] = ADR_ZPX,
+    [0xd7] = ADR_ZPX,
+    [0xd8] = ADR_IMP,
+    [0xd9] = ADR_ABY,
+    [0xda] = ADR_IMP,
+    [0xdb] = ADR_ABY,
+    [0xdc] = ADR_ABX,
+    [0xdd] = ADR_ABX,
+    [0xde] = ADR_ABX,
+    [0xdf] = ADR_ABX,
+    [0xe0] = ADR_IMM,
+    [0xe1] = ADR_IZX,
+    [0xe2] = ADR_IMP,
+    [0xe3] = ADR_IZX,
+    [0xe4] = ADR_ZP0,
+    [0xe5] = ADR_ZP0,
+    [0xe6] = ADR_ZP0,
+    [0xe7] = ADR_ZP0,
+    [0xe8] = ADR_IMP,
+    [0xe9] = ADR_IMM,
+    [0xea] = ADR_IMP,
+    [0xeb] = ADR_IMM,
+    [0xec] = ADR_ABS,
+    [0xed] = ADR_ABS,
+    [0xee] = ADR_ABS,
+    [0xef] = ADR_ABS,
+    [0xf0] = ADR_REL,
+    [0xf1] = ADR_IZY,
+    [0xf2] = ADR_IMM,
+    [0xf3] = ADR_IZY,
+    [0xf4] = ADR_ZPX,
+    [0xf5] = ADR_ZPX,
+    [0xf6] = ADR_ZPX,
+    [0xf7] = ADR_ZPX,
+    [0xf8] = ADR_IMP,
+    [0xf9] = ADR_ABY,
+    [0xfa] = ADR_IMP,
+    [0xfb] = ADR_ABY,
+    [0xfc] = ADR_ABX,
+    [0xfd] = ADR_ABX,
+    [0xfe] = ADR_ABX,
+    [0xff] = ADR_ABX,
+};
+
 void print_status(struct tnes_machine *machine)
 {
   struct ic_6502_registers *cpu = machine->cpu;
   struct ppu *ppu = machine->ppu;
 
-  printf("%04X ", cpu->pc);
   uint8_t opcode = cpu_bus_read(machine, cpu->pc);
 
-  switch (opcode)
+  printf("%04X  %02X ", cpu->pc, opcode);
+  switch (addressing_mode[opcode])
   {
-  case 0x00:
-  case 0x08:
-  case 0x18:
-  case 0x1a:
-  case 0x28:
-  case 0x38:
-  case 0x3a:
-  case 0x40:
-  case 0x48:
-  case 0x58:
-  case 0x5a:
-  case 0x60:
-  case 0x68:
-  case 0x78:
-  case 0x7a:
-  case 0x82:
-  case 0x88:
-  case 0x89:
-  case 0x8a:
-  case 0x98:
-  case 0x9a:
-  case 0xa8:
-  case 0xaa:
-  case 0xb8:
-  case 0xba:
-  case 0xc2:
-  case 0xc8:
-  case 0xca:
-  case 0xd8:
-  case 0xda:
-  case 0xe2:
-  case 0xe8:
-  case 0xea:
-  case 0xf8:
-  case 0xfa:
+  case ADR_IMP:
   {
-    // IMP
-    printf(" %02X       %s                             ", opcode, names[opcode]);
+    printf("      %s                             ", names[opcode]);
   }
   break;
 
-  case 0x0a:
-  case 0x2a:
-  case 0x4a:
-  case 0x6a:
+  case ADR_ACC:
   {
-    // ACC
-    printf(" %02X       %s A                           ", opcode, names[opcode]);
+    printf("      %s A                           ", names[opcode]);
   }
   break;
 
-  case 0x02:
-  case 0x09:
-  case 0x0b:
-  case 0x12:
-  case 0x22:
-  case 0x29:
-  case 0x2b:
-  case 0x32:
-  case 0x42:
-  case 0x49:
-  case 0x4b:
-  case 0x52:
-  case 0x62:
-  case 0x69:
-  case 0x6b:
-  case 0x72:
-  case 0x80:
-  case 0x8b:
-  case 0x92:
-  case 0xa0:
-  case 0xa2:
-  case 0xa9:
-  case 0xab:
-  case 0xb2:
-  case 0xc0:
-  case 0xc9:
-  case 0xcb:
-  case 0xd2:
-  case 0xe0:
-  case 0xe9:
-  case 0xeb:
-  case 0xf2:
+  case ADR_IMM:
   {
-    // IMM
     uint8_t ad = cpu_bus_read(machine, cpu->pc + 1);
-    printf(" %02X %02X    %s #$%02X                        ", opcode, ad, names[opcode], ad);
+    printf("%02X    %s #$%02X                        ", ad, names[opcode], ad);
   }
   break;
 
-  case 0x04:
-  case 0x05:
-  case 0x06:
-  case 0x07:
-  case 0x24:
-  case 0x25:
-  case 0x26:
-  case 0x27:
-  case 0x44:
-  case 0x45:
-  case 0x46:
-  case 0x47:
-  case 0x64:
-  case 0x65:
-  case 0x66:
-  case 0x67:
-  case 0x84:
-  case 0x85:
-  case 0x86:
-  case 0x87:
-  case 0xa4:
-  case 0xa5:
-  case 0xa6:
-  case 0xa7:
-  case 0xc4:
-  case 0xc5:
-  case 0xc6:
-  case 0xc7:
-  case 0xe4:
-  case 0xe5:
-  case 0xe6:
-  case 0xe7:
+  case ADR_ZP0:
   {
     // ZP0
     uint8_t ad = cpu_bus_read(machine, cpu->pc + 1);
     uint8_t val = cpu_bus_read(machine, ad);
 
-    printf(" %02X %02X    %s $%02X = %02X                    ", opcode, ad, names[opcode], ad, val);
+    printf("%02X    %s $%02X = %02X                    ", ad, names[opcode], ad, val);
   }
   break;
 
-  case 0x14:
-  case 0x15:
-  case 0x16:
-  case 0x17:
-  case 0x34:
-  case 0x35:
-  case 0x36:
-  case 0x37:
-  case 0x54:
-  case 0x55:
-  case 0x56:
-  case 0x57:
-  case 0x74:
-  case 0x75:
-  case 0x76:
-  case 0x77:
-  case 0x94:
-  case 0x95:
-  case 0xb4:
-  case 0xb5:
-  case 0xd4:
-  case 0xd5:
-  case 0xd6:
-  case 0xd7:
-  case 0xf4:
-  case 0xf5:
-  case 0xf6:
-  case 0xf7:
+  case ADR_ZPX:
   {
-    // ZPX
     uint8_t ad = cpu_bus_read(machine, cpu->pc + 1);
     uint8_t x = (ad + cpu->x) & 0xFF;
     uint8_t data = cpu_bus_read(machine, x);
-    printf(" %02X %02X    %s $%02X,X @ %02X = %02X             ", opcode, ad, names[opcode], ad, x, data);
+    printf("%02X    %s $%02X,X @ %02X = %02X             ", ad, names[opcode], ad, x, data);
   }
   break;
 
-  case 0x96:
-  case 0x97:
-  case 0xb6:
-  case 0xb7:
+  case ADR_ZPY:
   {
-    // ZPY
     uint8_t ad = cpu_bus_read(machine, cpu->pc + 1);
     uint8_t y = (ad + cpu->y) & 0xFF;
     uint8_t data = cpu_bus_read(machine, y);
-    printf(" %02X %02X    %s $%02X,Y @ %02X = %02X             ", opcode, ad, names[opcode], ad, y, data);
+    printf("%02X    %s $%02X,Y @ %02X = %02X             ", ad, names[opcode], ad, y, data);
   }
   break;
 
-  case 0x10:
-  case 0x30:
-  case 0x50:
-  case 0x70:
-  case 0x90:
-  case 0xb0:
-  case 0xd0:
-  case 0xf0:
+  case ADR_REL:
   {
-    // REL
     int8_t addr_rel = cpu_bus_read(machine, cpu->pc + 1);
-    printf(" %02X %02X    %s $%04X                       ", opcode, addr_rel & 0xFF, names[opcode], cpu->pc + addr_rel + 2);
+    printf("%02X    %s $%04X                       ", addr_rel, names[opcode], cpu->pc + addr_rel + 2);
   }
   break;
 
-  case 0x20:
-  case 0x4c:
+  case ADR_ABSJ:
   {
-    // ABS
     uint16_t lo = cpu_bus_read(machine, cpu->pc + 1);
     uint16_t hi = cpu_bus_read(machine, cpu->pc + 2);
-    printf(" %02X %02X %02X %s $%04X                       ", opcode, lo, hi, names[opcode], hi << 8 | lo);
+    printf("%02X %02X %s $%04X                       ", lo, hi, names[opcode], hi << 8 | lo);
   }
   break;
 
-  case 0x0c:
-  case 0x0d:
-  case 0x0e:
-  case 0x0f:
-  case 0x2c:
-  case 0x2d:
-  case 0x2e:
-  case 0x2f:
-  case 0x4d:
-  case 0x6d:
-  case 0x6e:
-  case 0x6f:
-  case 0x8d:
-  case 0x8c:
-  case 0x8e:
-  case 0x8f:
-  case 0xac:
-  case 0xad:
-  case 0x4e:
-  case 0x4f:
-  case 0xae:
-  case 0xaf:
-  case 0xcc:
-  case 0xcd:
-  case 0xce:
-  case 0xcf:
-  case 0xec:
-  case 0xed:
-  case 0xee:
-  case 0xef:
+  case ADR_ABS:
   {
-    // ABS (not jumps)
     uint16_t lo = cpu_bus_read(machine, cpu->pc + 1);
     uint16_t hi = cpu_bus_read(machine, cpu->pc + 2);
     uint8_t val = cpu_bus_read(machine, hi << 8 | lo);
-    printf(" %02X %02X %02X %s $%04X = %02X                  ", opcode, lo, hi, names[opcode], hi << 8 | lo, val);
+    printf("%02X %02X %s $%04X = %02X                  ", lo, hi, names[opcode], hi << 8 | lo, val);
   }
   break;
 
-  case 0x1c:
-  case 0x1d:
-  case 0x1e:
-  case 0x1f:
-  case 0x3c:
-  case 0x3d:
-  case 0x3e:
-  case 0x3f:
-  case 0x5c:
-  case 0x5d:
-  case 0x5e:
-  case 0x5f:
-  case 0x7c:
-  case 0x7d:
-  case 0x7e:
-  case 0x7f:
-  case 0x9c:
-  case 0x9d:
-  case 0xbc:
-  case 0xbd:
-  case 0xdc:
-  case 0xdd:
-  case 0xde:
-  case 0xdf:
-  case 0xfc:
-  case 0xfd:
-  case 0xfe:
-  case 0xff:
+  case ADR_ABX:
   {
-    // ABX
     uint8_t lo = cpu_bus_read(machine, cpu->pc + 1);
     uint8_t hi = cpu_bus_read(machine, cpu->pc + 2);
 
@@ -559,32 +634,12 @@ void print_status(struct tnes_machine *machine)
     uint16_t addr = base + cpu->x;
     uint8_t data = cpu_bus_read(machine, addr);
 
-    printf(" %02X %02X %02X %s $%04X,X @ %04X = %02X         ", opcode, lo, hi, names[opcode], base, addr, data);
+    printf("%02X %02X %s $%04X,X @ %04X = %02X         ", lo, hi, names[opcode], base, addr, data);
   }
   break;
 
-  case 0x19:
-  case 0x1b:
-  case 0x39:
-  case 0x3b:
-  case 0x59:
-  case 0x5b:
-  case 0x79:
-  case 0x7b:
-  case 0x99:
-  case 0x9b:
-  case 0x9e:
-  case 0x9f:
-  case 0xb9:
-  case 0xbb:
-  case 0xbe:
-  case 0xbf:
-  case 0xd9:
-  case 0xdb:
-  case 0xf9:
-  case 0xfb:
+  case ADR_ABY:
   {
-    // ABY
     uint8_t lo = cpu_bus_read(machine, cpu->pc + 1);
     uint8_t hi = cpu_bus_read(machine, cpu->pc + 2);
 
@@ -593,13 +648,12 @@ void print_status(struct tnes_machine *machine)
 
     uint8_t data = cpu_bus_read(machine, addr);
 
-    printf(" %02X %02X %02X %s $%04X,Y @ %04X = %02X         ", opcode, lo, hi, names[opcode], base, addr, data);
+    printf("%02X %02X %s $%04X,Y @ %04X = %02X         ", lo, hi, names[opcode], base, addr, data);
   }
   break;
 
-  case 0x6c:
+  case ADR_IND:
   {
-    // IND (Handles page boundary bug)
     uint8_t lo = cpu_bus_read(machine, cpu->pc + 1);
     uint8_t hi = cpu_bus_read(machine, cpu->pc + 2);
 
@@ -608,29 +662,13 @@ void print_status(struct tnes_machine *machine)
     uint16_t val = cpu_bus_read(machine, addr);
     val |= cpu_bus_read(machine, hi << 8 | ((lo + 1) & 0xff)) << 8;
 
-    printf(" %02X %02X %02X %s ($%04X) = %04X              ", opcode, lo, hi, names[opcode], addr, val);
+    printf("%02X %02X %s ($%04X) = %04X              ", lo, hi, names[opcode], addr, val);
   }
 
   break;
 
-  case 0x01:
-  case 0x03:
-  case 0x21:
-  case 0x23:
-  case 0x41:
-  case 0x43:
-  case 0x61:
-  case 0x63:
-  case 0x81:
-  case 0x83:
-  case 0xa1:
-  case 0xa3:
-  case 0xc1:
-  case 0xc3:
-  case 0xe1:
-  case 0xe3:
+  case ADR_IZX:
   {
-    // IZX
     uint8_t ad = cpu_bus_read(machine, cpu->pc + 1);
 
     uint8_t base = ad + cpu->x;
@@ -638,31 +676,14 @@ void print_status(struct tnes_machine *machine)
     addr |= cpu_bus_read(machine, (base + 1) & 0xFF) << 8;
 
     uint8_t val = cpu_bus_read(machine, addr);
-    printf(" %02X %02X    %s ($%02X,X) @ %02X = %04X = %02X    ", opcode, ad, names[opcode], ad, base, addr, val);
+    printf("%02X    %s ($%02X,X) @ %02X = %04X = %02X    ", ad, names[opcode], ad, base, addr, val);
   }
 
   break;
 
-  case 0x11:
-  case 0x13:
-  case 0x31:
-  case 0x33:
-  case 0x51:
-  case 0x53:
-  case 0x71:
-  case 0x73:
-  case 0x91:
-  case 0x93:
-  case 0xb1:
-  case 0xb3:
-  case 0xd1:
-  case 0xd3:
-  case 0xf1:
-  case 0xf3:
+  case ADR_IZY:
   {
-    // IZY
     uint8_t ad = cpu_bus_read(machine, cpu->pc + 1);
-    printf(" %02X %02X    ", opcode, ad);
 
     uint16_t base = cpu_bus_read(machine, ad);
     base |= cpu_bus_read(machine, (ad + 1) & 0xFF) << 8;
@@ -670,17 +691,13 @@ void print_status(struct tnes_machine *machine)
     uint16_t addr = base + cpu->y;
 
     uint8_t val = cpu_bus_read(machine, addr);
-    printf("%s ($%02X),Y = %04X @ %04X = %02X  ", names[opcode], ad, base, addr, val);
+    printf("%02X    %s ($%02X),Y = %04X @ %04X = %02X  ", ad, names[opcode], ad, base, addr, val);
   }
 
   break;
   }
 
-  // codes, dis = cpu.disassemble(cpu.pc);
-  printf("A:%02X X:%02X Y:%02X P:%02X SP:%02X ", cpu->a, cpu->x, cpu->y, cpu->status.raw, cpu->sp);
-  // "PPU:%3d,%3d CYC:%d\n", , 0, 0, 0 /*cpu->total_cycles - 1*/
-  printf("PPU:%3d,%3d CYC:%d", ppu->clock / 341, ppu->clock % 341, machine->cycles);
-  printf("\n");
+  printf("A:%02X X:%02X Y:%02X P:%02X SP:%02X PPU:%3d,%3d CYC:%d\n", cpu->a, cpu->x, cpu->y, cpu->status.raw, cpu->sp, ppu->clock / 341, ppu->clock % 341, machine->cycles);
 }
 
 int main(int argc, char *argv[])
@@ -716,12 +733,6 @@ int main(int argc, char *argv[])
 
   // ic_2c02_reset(&ppu);
   machine.reset = true;
-  cpu.a = 0;
-  cpu.x = 0;
-  cpu.y = 0;
-  cpu.status.raw = 0x20;
-  cpu.instruction = 0;
-  cpu.page_jump = 0;
   ppu.clock = 0;
   memset(machine.main_ram, 0, sizeof(machine.main_ram));
 
@@ -730,6 +741,7 @@ int main(int argc, char *argv[])
   {
     tick_machine(&machine);
   } while (machine.cpu->cycle != 0);
+
   cpu.pc = 0xc000;
 
   while (machine.cycles < 26555)
