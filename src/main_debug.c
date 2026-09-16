@@ -604,7 +604,7 @@ void print_status(struct tnes_machine *machine)
   case ADR_REL:
   {
     int8_t addr_rel = cpu_bus_read(machine, cpu->pc + 1);
-    printf("%02X    %s $%04X                       ", addr_rel, names[opcode], cpu->pc + addr_rel + 2);
+    printf("%02X    %s $%04X                       ", (uint8_t)addr_rel, names[opcode], cpu->pc + addr_rel + 2);
   }
   break;
 

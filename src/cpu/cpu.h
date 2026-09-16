@@ -365,6 +365,7 @@ enum ui_register
   UI_REG_PC_HI,
   UI_REG_PC_LO,
   UI_REG_PC_LATCH_LO,
+  UI_REG_AX,
 };
 
 enum ui_alu_op
@@ -415,7 +416,8 @@ enum ui_alu_op
   UI_ALU_CLV,
   UI_ALU_BIT,
   UI_ALU_PHP,
-  UI_ALU_PLP
+  UI_ALU_PLP,
+  UI_ALU_DCP,
 };
 
 enum ui_bus_action
