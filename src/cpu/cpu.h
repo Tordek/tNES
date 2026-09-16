@@ -319,7 +319,6 @@ typedef struct ic_6502_registers
   uint8_t op;
   uint8_t zp;
   uint16_t address;
-  uint16_t address_latch;
   uint16_t pc_latch;
   bool page_jump;
   bool nmi_requested;
@@ -395,12 +394,14 @@ enum ui_alu_op
   UI_ALU_ROL,
   UI_ALU_RORA,
   UI_ALU_ROR,
-  UI_ALU_ADDX,
   UI_ALU_RLA,
   UI_ALU_RRA,
   UI_ALU_INC,
   UI_ALU_DEC,
-  UI_ALU_ADDY,
+  UI_ALU_ADDR_ADDX,
+  UI_ALU_ADDR_ADDY,
+  UI_ALU_ZP_ADDX,
+  UI_ALU_ZP_ADDY,
   UI_ALU_SHIFT,
   UI_ALU_BRANCH_CHECK,
   UI_ALU_BRANCH_TRY,
