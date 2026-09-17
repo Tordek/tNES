@@ -744,7 +744,7 @@ int main(int argc, char *argv[])
 
   cpu.pc = 0xc000;
 
-  while (machine.cycles < 26555)
+  while (machine.cycles < 26555 * 3)
   {
     print_status(&machine);
     do
