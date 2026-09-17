@@ -41,6 +41,7 @@ int main(int argc, char *argv[])
   machine.cartridge = cartridge;
   machine.cycles = 0;
   machine.reset = true;
+  machine.dma_write_time = 0;
   cpu.instruction = 0x00;
   cpu.nmi_requested = false;
 

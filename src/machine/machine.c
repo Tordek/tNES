@@ -69,6 +69,11 @@ void cpu_bus_write(void *device, uint16_t address, uint8_t data)
   // 0x20 bytes of APU and Controller handling.
   else if (address < 0x4020)
   {
+    if (address == 0x4014)
+    {
+      machine->dma_page = data << 8;
+      machine->dma_write_time = 513 + (machine->cpu->cycles & 0x01);
+    }
     // cartridge->base.dma_page = data << 8;
     // cartridge->base.dma_write_time = 513 + (cartridge->base.cycles & 0x01);
     // if (address == 0x4016 || address == 0x4017)
@@ -95,8 +100,6 @@ uint8_t ppu_bus_read(void *device, uint16_t address)
   // The last 0x100 are 8 0x20 mirrors of palette ram
   else
   {
-    // return machine->palette_ram[address & 0x1f];
-
     return machine->palette_ram[address & 0x1f];
   }
 }
@@ -116,9 +119,6 @@ void ppu_bus_write(void *device, uint16_t address, uint8_t data)
   // The last 0x100 are 8 0x20 mirrors of palette ram
   else
   {
-    printf("color %d\n", data);
-    // machine->palette_ram[address & 0x1f] = data;
-    // machine->ppu->palette[address & 0x1f] = data;
     uint8_t palette_pos = address & 0x1f;
     if ((palette_pos & 0x03) == 0)
     {
@@ -153,13 +153,27 @@ int tick_machine(struct tnes_machine *machine)
 
   if (machine->cycles % 3 == 0)
   {
-    struct ic_6502_bus cpu_bus =
-        {
-            .context = machine,
-            .read = cpu_bus_read,
-            .write = cpu_bus_write};
+    if (machine->dma_write_time)
+    {
+      machine->dma_write_time--;
+      // TODO: Read and write on separate cycles.
+      if (machine->dma_write_time <= 512 && machine->dma_write_time % 2 == 0)
+      {
+        uint16_t byte = 255 - (machine->dma_write_time >> 1);
+        uint8_t val = cpu_bus_read(machine, machine->dma_page | byte);
+        cpu_bus_write(machine, 0x2004, val);
+      }
+    }
+    else
+    {
+      struct ic_6502_bus cpu_bus =
+          {
+              .context = machine,
+              .read = cpu_bus_read,
+              .write = cpu_bus_write};
 
-    tick_cpu(machine->cpu, &cpu_bus, false /* machine->apu.irq || machine->cartridge.irq */, machine->reset);
+      tick_cpu(machine->cpu, &cpu_bus, false /* machine->apu.irq || machine->cartridge.irq */, machine->reset);
+    }
   }
 
   machine->reset = false;
