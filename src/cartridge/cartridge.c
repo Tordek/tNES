@@ -30,7 +30,7 @@ uint8_t cartridge0_read_cpu_bus(void *ctx, uint16_t address)
   }
   else if (address < 0x8000)
   {
-    return cartridge->prg_ram[address]; // TODO: Mirroring.
+    return cartridge->prg_ram[address & 0x1fff];
   }
   else
   {

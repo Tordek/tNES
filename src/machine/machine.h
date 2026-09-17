@@ -15,6 +15,8 @@ struct tnes_machine
   bool reset;
   int sampling_count;
   int cycles;
+  uint16_t dma_page;
+  int dma_write_time;
 };
 
 /**
