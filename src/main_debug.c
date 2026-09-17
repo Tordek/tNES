@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -547,7 +548,7 @@ enum addressing_mode addressing_mode[256] = {
 void print_status(struct tnes_machine *machine)
 {
   struct ic_6502_registers *cpu = machine->cpu;
-  struct ppu *ppu = machine->ppu;
+  struct ic_2c02_registers *ppu = machine->ppu;
 
   uint8_t opcode = cpu_bus_read(machine, cpu->pc);
 
@@ -697,7 +698,7 @@ void print_status(struct tnes_machine *machine)
   break;
   }
 
-  printf("A:%02X X:%02X Y:%02X P:%02X SP:%02X PPU:%3d,%3d CYC:%d\n", cpu->a, cpu->x, cpu->y, cpu->status.raw, cpu->sp, ppu->clock / 341, ppu->clock % 341, machine->cycles);
+  printf("A:%02X X:%02X Y:%02X P:%02X SP:%02X PPU:%3d,%3d CYC:%d\n", cpu->a, cpu->x, cpu->y, cpu->status.raw, cpu->sp, ppu->clock / 341, ppu->clock % 341, cpu->cycles);
 }
 
 int main(int argc, char *argv[])
@@ -726,14 +727,13 @@ int main(int argc, char *argv[])
   struct tnes_machine machine;
   struct cartridge *cartridge = cartridge_builder(&rom);
   struct ic_6502_registers cpu;
-  struct ppu ppu;
+  struct ic_2c02_registers ppu;
   machine.cpu = &cpu;
   machine.ppu = &ppu;
   machine.cartridge = cartridge;
 
-  // ic_2c02_reset(&ppu);
+  ic_2c02_init(&ppu);
   machine.reset = true;
-  ppu.clock = 0;
   memset(machine.main_ram, 0, sizeof(machine.main_ram));
 
   // Special Debug mode for NESTEST rom.
@@ -749,6 +749,8 @@ int main(int argc, char *argv[])
     print_status(&machine);
     do
     {
+      tick_machine(&machine);
+      tick_machine(&machine);
       tick_machine(&machine);
     } while (machine.cpu->cycle != 0);
   }

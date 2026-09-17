@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <assert.h>
 
 #include "cpu/cpu.h"
@@ -17,9 +18,9 @@ struct mapper_0_cartridge
   uint8_t *chr_rom;
 };
 
-uint8_t cartridge0_read_cpu_bus(void *bus, uint16_t address)
+uint8_t cartridge0_read_cpu_bus(void *ctx, uint16_t address)
 {
-  struct mapper_0_cartridge *cartridge = (struct mapper_0_cartridge *)bus;
+  struct mapper_0_cartridge *cartridge = (struct mapper_0_cartridge *)ctx;
 
   // Mapper 0 ignores everything outside its space.
   if (address < 0x6000)
@@ -37,9 +38,9 @@ uint8_t cartridge0_read_cpu_bus(void *bus, uint16_t address)
   }
 }
 
-void cartridge0_write_cpu_bus(void *bus, uint16_t address, uint8_t data)
+void cartridge0_write_cpu_bus(void *ctx, uint16_t address, uint8_t data)
 {
-  struct mapper_0_cartridge *cartridge = (struct mapper_0_cartridge *)bus;
+  struct mapper_0_cartridge *cartridge = (struct mapper_0_cartridge *)ctx;
 
   if (address < 0x6000)
   {
@@ -55,15 +56,21 @@ void cartridge0_write_cpu_bus(void *bus, uint16_t address, uint8_t data)
   }
 }
 
-uint8_t cartridge0_read_ppu_bus(void *bus, uint16_t address)
+uint8_t cartridge0_read_ppu_bus(void *ctx, uint8_t *ppu_ram, uint16_t address)
 {
-  struct mapper_0_cartridge *cartridge = (struct mapper_0_cartridge *)bus;
-  return cartridge->chr_rom[address];
+  struct mapper_0_cartridge *cartridge = (struct mapper_0_cartridge *)ctx;
+  if (address < 0x2000)
+  {
+    return cartridge->chr_rom[address];
+  }
+
+  return ppu_ram[address & 0x7ff];
 }
 
-void cartridge0_write_ppu_bus(void *bus, uint16_t address, uint8_t data)
+void cartridge0_write_ppu_bus(void *ctx, uint8_t *ppu_ram, uint16_t address, uint8_t data)
 {
-  // NOP because Mapper 0 only has PPU ROM.
+  // TODO: Nametable mirroring.
+  ppu_ram[address & 0x7ff] = data;
 }
 
 struct cartridge *cartridge_builder(struct nes_rom *rom)
@@ -83,6 +90,7 @@ struct cartridge *cartridge_builder(struct nes_rom *rom)
 
         .prg_rom_mirroring = rom->prg_rom_size == 0x4000 ? 0x3fff : 0x7fff,
         .prg_rom = rom->prg_rom,
+        .chr_rom = rom->chr_rom,
     };
     return (struct cartridge *)cartridge;
   }

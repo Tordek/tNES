@@ -275,7 +275,7 @@ enum ic_6502_state
   IC_6502_IRQ,
 };
 
-enum ic_6503_status_enum
+enum ic_6502_status_enum
 {
   IC_6502_STATUS_B = 0x10
 };
@@ -322,6 +322,7 @@ typedef struct ic_6502_registers
   uint16_t pc_latch;
   bool page_jump;
   bool nmi_requested;
+  int cycles;
 } ic_6502_registers;
 
 /**

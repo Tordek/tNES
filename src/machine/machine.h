@@ -4,11 +4,12 @@
  */
 struct tnes_machine
 {
-  char main_ram[2048];
-  char palette_ram[32];
+  uint8_t main_ram[0x800];
+  uint8_t ppu_ram[0x800];
+  uint8_t palette_ram[0x20];
 
   struct ic_6502_registers *cpu;
-  struct ppu *ppu;
+  struct ic_2c02_registers *ppu;
   struct cartridge *cartridge; ///< The game currently plugged into the machine.
 
   bool reset;
