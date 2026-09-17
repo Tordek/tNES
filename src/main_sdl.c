@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <stdbool.h>
 #include <stdio.h>
 
 #include "rom/rom.h"
@@ -34,10 +35,14 @@ int main(int argc, char *argv[])
   struct tnes_machine machine;
   struct cartridge *cartridge = cartridge_builder(&rom);
   struct ic_6502_registers cpu;
-  struct ppu ppu;
+  struct ic_2c02_registers ppu;
   machine.cpu = &cpu;
   machine.ppu = &ppu;
   machine.cartridge = cartridge;
+  machine.cycles = 0;
+  machine.reset = true;
+  cpu.instruction = 0x00;
+  cpu.nmi_requested = false;
 
   printf("Starting SDL...\n");
   struct renderer_state *state = initialize_sdl(&machine);
@@ -48,8 +53,7 @@ int main(int argc, char *argv[])
     return -1;
   }
 
-  // ic_2c02_reset(&ppu);
-  // ic_6502_reset(&cpu);
+  ic_2c02_init(&ppu);
 
   // int max_cycles = 1000000;
   while (1)

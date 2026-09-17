@@ -10,8 +10,8 @@ struct cartridge
   uint8_t (*cpu_read)(void *ctx, uint16_t addr);
   void (*cpu_write)(void *ctx, uint16_t addr, uint8_t data);
 
-  uint8_t (*ppu_read)(void *ctx, uint16_t addr);
-  void (*ppu_write)(void *ctx, uint16_t addr, uint8_t data);
+  uint8_t (*ppu_read)(void *ctx, uint8_t *ppu_ram, uint16_t addr);
+  void (*ppu_write)(void *ctx, uint8_t *ppu_ram, uint16_t addr, uint8_t data);
 };
 
 struct cartridge *cartridge_builder(struct nes_rom *rom);

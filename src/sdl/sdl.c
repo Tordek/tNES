@@ -3,6 +3,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
 
+#include "ppu/ppu.h"
 #include "machine/machine.h"
 
 struct renderer_state
@@ -14,6 +15,7 @@ struct renderer_state
   SDL_Window *main_window;
   SDL_Window *debug_window;
   SDL_Palette *palette;
+  struct tnes_machine *machine;
 };
 
 void audio_callback(void *userdata, SDL_AudioStream *stream, int additional_amount, int total_amount)
@@ -78,6 +80,7 @@ bool initialize_sdl_audio(struct tnes_machine *machine, struct renderer_state *s
   }
   state->counter = 0;
   state->prev_ticks = 0;
+  state->machine = machine;
 
   return true;
 }
@@ -111,7 +114,7 @@ bool initialize_sdl_video(struct tnes_machine *machine, struct renderer_state *s
   //   return NULL;
   // }
 
-  state->palette = SDL_CreatePalette(128);
+  state->palette = SDL_CreatePalette(64);
   SDL_Color colors[64] = {
       {.a = 0xff, .r = 0x7c, .g = 0x7c, .b = 0x7c},
       {.a = 0xff, .r = 0x00, .g = 0x00, .b = 0xfc},
@@ -178,7 +181,7 @@ bool initialize_sdl_video(struct tnes_machine *machine, struct renderer_state *s
       {.a = 0xff, .r = 0x00, .g = 0x00, .b = 0x00},
       {.a = 0xff, .r = 0x00, .g = 0x00, .b = 0x00},
   };
-  bool success = SDL_SetPaletteColors(state->palette, colors, 0, 128);
+  bool success = SDL_SetPaletteColors(state->palette, colors, 0, 64);
   if (!success)
   {
     SDL_Log("Failed to create palette: %s", SDL_GetError());
@@ -243,7 +246,7 @@ void render(struct renderer_state *state)
     SDL_Log("Failed to fill surface: %s", SDL_GetError());
   }
 
-  SDL_Surface *s = SDL_CreateSurface(16, 4, SDL_PIXELFORMAT_INDEX8);
+  SDL_Surface *s = SDL_CreateSurface(256, 240, SDL_PIXELFORMAT_INDEX8);
   if (!s)
   {
     SDL_Log("Failed to fill surface: %s", SDL_GetError());
@@ -255,30 +258,19 @@ void render(struct renderer_state *state)
     SDL_Log("Failed to fill surface: %s", SDL_GetError());
   }
 
-  for (int j = 0; j < 64; j++)
-  {
-    char *pixels = s->pixels;
-    pixels[j] = j;
-  }
-  // for (int i = 0; i < 240; i++)
-  // {
-  //   for (int j = 0; j < 256; j++)
-  //   {
-  //     ((uint32_t *)s->pixels)[(i * s->w + j)] = palette_table[ppu.screen[i][j]];
-  //   }
-  // }
+  memcpy(s->pixels, state->machine->ppu->screen, 240 * 256);
 
   SDL_Rect gameSrc = {
       .x = 0,
       .y = 0,
-      .w = 16,
-      .h = 4,
+      .w = 256,
+      .h = 240,
   };
   SDL_Rect gameDst = {
       .x = 0,
       .y = 0,
-      .w = 256,
-      .h = 64,
+      .w = 512,
+      .h = 480,
   };
   success = SDL_BlitSurfaceScaled(s, &gameSrc, main_surface, &gameDst, SDL_SCALEMODE_NEAREST);
   if (!success)
@@ -357,7 +349,7 @@ void render(struct renderer_state *state)
     for (int j = 0; j < 64; j++)
     {
       char *pixels = s->pixels;
-      pixels[j] = j;
+      pixels[j] = state->machine->palette_ram[j % 32];
     }
 
     SDL_Rect paletteSrc = {

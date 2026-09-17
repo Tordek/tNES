@@ -543,6 +543,8 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
 
 void tick_cpu(ic_6502_registers *cpu, struct ic_6502_bus *bus, bool irq, bool reset)
 {
+    cpu->cycles++;
+
     // RESET aborts the current instruction.
     if (reset)
     {
@@ -580,6 +582,7 @@ void tick_cpu(ic_6502_registers *cpu, struct ic_6502_bus *bus, bool irq, bool re
     if (cpu->nmi_requested)
     {
         cpu->state = IC_6502_NMI;
+        cpu->nmi_requested = false;
     }
     else if (irq && !cpu->status.i)
     {
