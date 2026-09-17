@@ -302,14 +302,14 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
     {
         uint16_t addition = cpu->address + cpu->x;
         cpu->address = (cpu->address & 0xff00) | (addition & 0xff);
-        cpu->page_jump = cpu->address != addition;
+        cpu->page_jump = addition - cpu->address;
     }
     break;
     case UI_ALU_ADDR_ADDY:
     {
         uint16_t addition = cpu->address + cpu->y;
         cpu->address = (cpu->address & 0xff00) | (addition & 0xff);
-        cpu->page_jump = cpu->address != addition;
+        cpu->page_jump = addition - cpu->address;
         break;
     }
     break;
