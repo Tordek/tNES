@@ -43,6 +43,7 @@ int main(int argc, char *argv[])
   machine.reset = true;
   machine.dma_write_time = 0;
   cpu.instruction = 0x00;
+  cpu.page_jump = 0;
   cpu.nmi_requested = false;
 
   printf("Starting SDL...\n");

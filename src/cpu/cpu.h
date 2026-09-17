@@ -320,7 +320,7 @@ typedef struct ic_6502_registers
   uint8_t zp;
   uint16_t address;
   uint16_t pc_latch;
-  bool page_jump;
+  int16_t page_jump;
   bool nmi_requested;
   int cycles;
 } ic_6502_registers;

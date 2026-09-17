@@ -119,6 +119,7 @@ bool run_break(ic_6502_registers *cpu, struct ic_6502_bus *bus)
 bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
 {
     struct micro_instruction i = uinstructions[cpu->instruction][cpu->cycle++];
+    bool should_jump = false;
 
     // Read.
     uint8_t value;
@@ -141,21 +142,18 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
             break;
         case UI_ADDR_LATCH:
             address = cpu->address;
-            if (cpu->page_jump)
-            {
-                cpu->address += 0x100;
-            }
             break;
         case UI_ADDR_TEMP:
+            cpu->address += cpu->page_jump;
             address = cpu->address;
-            cpu->page_jump = false;
+            cpu->page_jump = 0;
             break;
         case UI_ADDR_TEMP_INC:
         {
             address = cpu->address;
             uint16_t addition = cpu->address + 1;
             cpu->address = (cpu->address & 0xff00) | (addition & 0xff);
-            cpu->page_jump = cpu->address != addition;
+            cpu->page_jump = addition - cpu->address;
         }
         break;
         case UI_ADDR_ZP:
@@ -379,49 +377,49 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
         case BVS_REL_70:
             if (cpu->status.v)
             {
-                cpu->page_jump = true;
+                should_jump = true;
             }
             break;
         case BVC_REL_50:
             if (!cpu->status.v)
             {
-                cpu->page_jump = true;
+                should_jump = true;
             }
             break;
         case BCS_REL_b0:
             if (cpu->status.c)
             {
-                cpu->page_jump = true;
+                should_jump = true;
             }
             break;
         case BCC_REL_90:
             if (!cpu->status.c)
             {
-                cpu->page_jump = true;
+                should_jump = true;
             }
             break;
         case BEQ_REL_f0:
             if (cpu->status.z)
             {
-                cpu->page_jump = true;
+                should_jump = true;
             }
             break;
         case BNE_REL_d0:
             if (!cpu->status.z)
             {
-                cpu->page_jump = true;
+                should_jump = true;
             }
             break;
         case BMI_REL_30:
             if (cpu->status.n)
             {
-                cpu->page_jump = true;
+                should_jump = true;
             }
             break;
         case BPL_REL_10:
             if (!cpu->status.n)
             {
-                cpu->page_jump = true;
+                should_jump = true;
             }
             break;
 
@@ -435,12 +433,13 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
     {
         uint16_t addition = cpu->pc + (int8_t)cpu->zp;
         cpu->pc = (cpu->pc & 0xff00) | (addition & 0xff);
-        cpu->page_jump = cpu->pc != addition;
+        cpu->page_jump = addition - cpu->pc;
         break;
     }
     case UI_ALU_BRANCH_JUMP:
     {
-        cpu->page_jump = false;
+        cpu->pc += cpu->page_jump;
+        cpu->page_jump = 0;
         break;
     }
     default:
@@ -475,11 +474,9 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
             update_status(&cpu->status, value);
             break;
         case UI_REG_TEMP_LO:
-            // cpu->address_latch = (cpu->address & 0xff00) | value;
             cpu->address = (cpu->address & 0xff00) | value;
             break;
         case UI_REG_TEMP_HI:
-            // cpu->address_latch = (cpu->address & 0x00ff) | value << 8;
             cpu->address = (cpu->address & 0x00ff) | value << 8;
             break;
         case UI_REG_PC_LATCH_LO:
@@ -519,14 +516,11 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
             break;
         case UI_ADDR_LATCH:
             address = cpu->address;
-            if (cpu->page_jump)
-            {
-                cpu->address += 0x100;
-            }
             break;
         case UI_ADDR_TEMP:
+            cpu->address += cpu->page_jump;
             address = cpu->address;
-            cpu->page_jump = false;
+            cpu->page_jump = 0;
             break;
         case UI_ADDR_ZP:
             address = cpu->zp;
@@ -538,7 +532,7 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
         bus->write(bus->context, address, value);
     }
 
-    return !cpu->page_jump && i.finished;
+    return !should_jump && !cpu->page_jump && i.finished;
 }
 
 void tick_cpu(ic_6502_registers *cpu, struct ic_6502_bus *bus, bool irq, bool reset)
@@ -551,7 +545,7 @@ void tick_cpu(ic_6502_registers *cpu, struct ic_6502_bus *bus, bool irq, bool re
         cpu->state = IC_6502_RESET;
         cpu->cycle = 0;
         cpu->instruction = 0;
-        cpu->page_jump = false;
+        cpu->page_jump = 0;
     }
 
     bool done = true;
@@ -578,7 +572,7 @@ void tick_cpu(ic_6502_registers *cpu, struct ic_6502_bus *bus, bool irq, bool re
     }
 
     cpu->cycle = 0;
-    cpu->page_jump = false;
+    cpu->page_jump = 0;
     if (cpu->nmi_requested)
     {
         cpu->state = IC_6502_NMI;
@@ -970,8 +964,8 @@ struct micro_instruction uinstructions[256][20] =
             {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_SP, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_P, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_SP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_PC_LATCH_LO, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_PC_HI, .address = UI_ADDR_SP, .alu_op = UI_ALU_NONE, .finished = true},
         },
         [EOR_IZX_41] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
