@@ -167,6 +167,12 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
             address = cpu->zp;
             cpu->zp++;
             break;
+        case UI_ADDR_BRK_LO:
+            address = 0xFFFE;
+            break;
+        case UI_ADDR_BRK_HI:
+            address = 0xFFFF;
+            break;
         }
         value = bus->read(bus->context, address);
     }
@@ -452,6 +458,9 @@ bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
         break;
     case UI_ALU_BRANCH_JUMP:
         break;
+    case UI_ALU_BRK:
+        cpu->status.b = 1;
+        break;
     default:
         break;
     }
@@ -599,7 +608,12 @@ struct micro_instruction uinstructions[256][20] =
     {
         [BRK_IMP_00] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_PC_HI, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_BRK, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_PC_LO, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_P, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_PC_LATCH_LO, .address = UI_ADDR_BRK_LO, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_PC_HI, .address = UI_ADDR_BRK_HI, .alu_op = UI_ALU_NONE, .finished = true},
         },
         [ORA_IZX_01] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
