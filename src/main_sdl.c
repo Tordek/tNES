@@ -19,8 +19,13 @@ int main(int argc, char *argv[])
 
   struct nes_rom rom;
   FILE *rom_file = fopen(argv[1], "r");
-  int rc = read_rom(&rom, rom_file);
+  if (!rom_file)
+  {
+    fprintf(stderr, "File not found: %s\n", argv[1]);
+    return 1;
+  }
 
+  int rc = read_rom(&rom, rom_file);
   if (rc)
   {
     fprintf(stderr, "Not a iNES/NES2.0 file\n");
