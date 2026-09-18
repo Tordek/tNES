@@ -348,6 +348,8 @@ enum ui_address
   UI_ADDR_LATCH,
   UI_ADDR_SP,
   UI_ADDR_SP_INC,
+  UI_ADDR_BRK_LO,
+  UI_ADDR_BRK_HI
 };
 
 enum ui_register
@@ -419,6 +421,7 @@ enum ui_alu_op
   UI_ALU_PHP,
   UI_ALU_PLP,
   UI_ALU_DCP,
+  UI_ALU_BRK,
 };
 
 enum ui_bus_action
