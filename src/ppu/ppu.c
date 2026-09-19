@@ -489,7 +489,6 @@ void ic_2c02_mmapped_write(struct ic_2c02_registers *ppu, struct ic_2c02_bus *bu
     ppu->oam_addr = value;
     break;
   case mmapped_oamdata:
-    printf("%x to 2004 at %x\n", value, ppu->oam_addr);
     ppu->primary_oam.raw[ppu->oam_addr] = value;
     ppu->oam_addr++;
     break;

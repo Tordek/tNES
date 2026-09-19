@@ -613,8 +613,10 @@ void print_status(struct tnes_machine *machine)
 
   case ADR_REL:
   {
+    uint8_t read;
     int8_t addr_rel;
-    cpu_bus_read(&addr_rel, machine, cpu->ic_6502.pc + 1);
+    cpu_bus_read(&read, machine, cpu->ic_6502.pc + 1);
+    addr_rel = read;
     printf("%02X    %s $%04X                       ", (uint8_t)addr_rel, names[opcode], cpu->ic_6502.pc + addr_rel + 2);
   }
   break;

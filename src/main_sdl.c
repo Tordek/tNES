@@ -39,6 +39,11 @@ int main(int argc, char *argv[])
   printf("CHR_ROM size: %d bytes\n", rom.chr_rom_size);
 
   struct cartridge *cartridge = cartridge_builder(&rom);
+  if (!cartridge)
+  {
+    printf("Failed to load cartridge\n");
+    return 1;
+  }
   struct ic_rp2a03_registers cpu;
   struct ic_2c02_registers ppu;
 
@@ -46,24 +51,24 @@ int main(int argc, char *argv[])
   cpu.ic_6502.page_jump = 0;
   cpu.ic_6502.nmi_requested = false;
 
-  struct tnes_machine machine = {
+  static struct tnes_machine machine;
+  machine = (struct tnes_machine){
       .cpu = &cpu,
       .ppu = &ppu,
       .cartridge = cartridge,
       .cycles = 0,
       .reset = true,
       .cpu_bus = {
-          .context = &machine,
           .read = cpu_bus_read,
           .write = cpu_bus_write,
       },
       .ppu_bus = {
-          .context = &machine,
           .read = ppu_bus_read,
           .write = ppu_bus_write,
       },
   };
-
+  machine.cpu_bus.context = &machine;
+  machine.ppu_bus.context = &machine;
   printf("Starting SDL...\n");
   struct renderer_state *state = initialize_sdl(&machine);
   printf("SDL initialized.\n");

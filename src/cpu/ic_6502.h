@@ -422,6 +422,7 @@ enum ui_alu_op
   UI_ALU_PLP,
   UI_ALU_DCP,
   UI_ALU_BRK,
+  UI_ALU_RTI,
 };
 
 enum ui_bus_action
