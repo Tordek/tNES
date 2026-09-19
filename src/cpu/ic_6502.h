@@ -328,14 +328,14 @@ typedef struct ic_6502_registers
 /**
  * Latches the NMI Interrupt Request.
  */
-void nmi(ic_6502_registers *cpu);
+void ic_6502_nmi(ic_6502_registers *cpu);
 
 /**
  * Runs one step of the CPU.
  * Since IRQ and RESET are level-sensitive, it must be checked at tick time,
  * unlike NMI.
  */
-void tick_cpu(ic_6502_registers *cpu, struct ic_6502_bus *bus_ops, bool irq, bool reset);
+void ic_6502_tick(ic_6502_registers *cpu, struct ic_6502_bus *bus_ops, bool irq, bool reset);
 
 enum ui_address
 {

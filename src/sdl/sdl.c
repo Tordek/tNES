@@ -3,6 +3,8 @@
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
 
+#include "cpu/ic_6502.h"
+#include "cpu/ic_rp2a03.h"
 #include "ppu/ppu.h"
 #include "machine/machine.h"
 
@@ -418,9 +420,64 @@ int handle_inputs(struct renderer_state *state)
         }
         break;
 
-      default:
+      case SDLK_W:
+        state->machine->cpu->player1.buttons.up = 1;
+        break;
+      case SDLK_A:
+        state->machine->cpu->player1.buttons.left = 1;
+        break;
+      case SDLK_S:
+        state->machine->cpu->player1.buttons.down = 1;
+        break;
+      case SDLK_D:
+        state->machine->cpu->player1.buttons.right = 1;
+        break;
+      case SDLK_V:
+        state->machine->cpu->player1.buttons.select = 1;
+        break;
+      case SDLK_B:
+        state->machine->cpu->player1.buttons.start = 1;
+        break;
+      case SDLK_K:
+        state->machine->cpu->player1.buttons.b = 1;
+        break;
+      case SDLK_L:
+        state->machine->cpu->player1.buttons.a = 1;
         break;
       }
+      break;
+    }
+    case SDL_EVENT_KEY_UP:
+    {
+      SDL_KeyboardEvent *ke = (SDL_KeyboardEvent *)&event;
+      switch (ke->key)
+      {
+      case SDLK_W:
+        state->machine->cpu->player1.buttons.up = 0;
+        break;
+      case SDLK_A:
+        state->machine->cpu->player1.buttons.left = 0;
+        break;
+      case SDLK_S:
+        state->machine->cpu->player1.buttons.down = 0;
+        break;
+      case SDLK_D:
+        state->machine->cpu->player1.buttons.right = 0;
+        break;
+      case SDLK_V:
+        state->machine->cpu->player1.buttons.select = 0;
+        break;
+      case SDLK_B:
+        state->machine->cpu->player1.buttons.start = 0;
+        break;
+      case SDLK_K:
+        state->machine->cpu->player1.buttons.b = 0;
+        break;
+      case SDLK_L:
+        state->machine->cpu->player1.buttons.a = 0;
+        break;
+      }
+      break;
     }
     }
   }

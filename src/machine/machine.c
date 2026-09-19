@@ -1,6 +1,8 @@
 #include <stdint.h>
 #include <stdbool.h>
-#include "cpu/cpu.h"
+
+#include "cpu/ic_6502.h"
+#include "cpu/ic_rp2a03.h"
 #include "ppu/ppu.h"
 #include "rom/rom.h"
 #include "machine/machine.h"
@@ -30,13 +32,7 @@ uint8_t cpu_bus_read(void *device, uint16_t address)
   // 0x20 bytes of APU and Controller handling.
   else if (address < 0x4020)
   {
-    // if (address == 0x4016 || address == 0x4017)
-    // {
-    //   // TODO: ?
-    //   return controllers_read(machine->base.controllers, address & 0x0001);
-    // }
-    // return ic_rp2a03_read(machine->base.apu, address & 0x001f);
-    return 0;
+    return ic_rp2a03_mmapped_read(machine->cpu, address & 0x001f);
   }
   // And the rest is for the Mapper to handle
   else
@@ -81,7 +77,7 @@ void cpu_bus_write(void *device, uint16_t address, uint8_t data)
     //   // TODO: ?
     //   return controllers_read(machine->base.controllers, address & 0x0001);
     // }
-    // return ic_rp2a03_read(machine->base.apu, address & 0x001f);
+    ic_rp2a03_mmapped_write(machine->cpu, address & 0x001f, data);
   }
 }
 
@@ -148,7 +144,7 @@ int tick_machine(struct tnes_machine *machine)
 
   if (vblank && machine->ppu->do_nmi)
   {
-    nmi(machine->cpu);
+    ic_rp2a03_nmi(machine->cpu);
   }
 
   if (machine->cycles % 3 == 0)
@@ -172,7 +168,7 @@ int tick_machine(struct tnes_machine *machine)
               .read = cpu_bus_read,
               .write = cpu_bus_write};
 
-      tick_cpu(machine->cpu, &cpu_bus, false /* machine->apu.irq || machine->cartridge.irq */, machine->reset);
+      ic_rp2a03_tick(machine->cpu, &cpu_bus, false /* machine->apu.irq || machine->cartridge.irq */, machine->reset);
     }
   }
 

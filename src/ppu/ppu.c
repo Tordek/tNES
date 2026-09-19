@@ -506,23 +506,6 @@ void ic_2c02_mmapped_write(struct ic_2c02_registers *ppu, struct ic_2c02_bus *bu
     break;
   case mmapped_ppudata:
     bus->write(bus->context, ppu->vram_address & 0x3fff, value);
-    // if (ppu->vram_address < 0x3f00)
-    // {
-    //   bus->write(bus->context, ppu->vram_address & 0x3FFF, value);
-    // }
-    // else
-    // {
-    //   uint8_t palette_pos = ppu->vram_address & 0x1f;
-    //   if ((palette_pos & 0x03) == 0)
-    //   {
-    //     ppu->palette[palette_pos & 0x0F] = value;
-    //     ppu->palette[palette_pos | 0x10] = value;
-    //   }
-    //   else
-    //   {
-    //     ppu->palette[palette_pos] = value;
-    //   }
-    // }
 
     if (ppu->mask & 0x18 && ppu->scanline < 240)
     {
