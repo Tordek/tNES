@@ -6,7 +6,8 @@
 #include "cartridge/cartridge.h"
 #include "machine/machine.h"
 #include "sdl/sdl.h"
-#include "cpu/cpu.h"
+#include "cpu/ic_6502.h"
+#include "cpu/ic_rp2a03.h"
 #include "ppu/ppu.h"
 
 int main(int argc, char *argv[])
@@ -39,7 +40,7 @@ int main(int argc, char *argv[])
 
   struct tnes_machine machine;
   struct cartridge *cartridge = cartridge_builder(&rom);
-  struct ic_6502_registers cpu;
+  struct ic_rp2a03_registers cpu;
   struct ic_2c02_registers ppu;
   machine.cpu = &cpu;
   machine.ppu = &ppu;
@@ -47,9 +48,9 @@ int main(int argc, char *argv[])
   machine.cycles = 0;
   machine.reset = true;
   machine.dma_write_time = 0;
-  cpu.instruction = 0x00;
-  cpu.page_jump = 0;
-  cpu.nmi_requested = false;
+  cpu.ic_6502.instruction = 0x00;
+  cpu.ic_6502.page_jump = 0;
+  cpu.ic_6502.nmi_requested = false;
 
   printf("Starting SDL...\n");
   struct renderer_state *state = initialize_sdl(&machine);

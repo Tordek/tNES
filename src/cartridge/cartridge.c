@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <assert.h>
 
-#include "cpu/cpu.h"
+#include "cpu/ic_6502.h"
 #include "ppu/ppu.h"
 #include "rom/rom.h"
 #include "cartridge/cartridge.h"

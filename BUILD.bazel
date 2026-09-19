@@ -6,8 +6,14 @@ load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
 cc_library(
     name = "cpu",
-    srcs = ["src/cpu/cpu.c"],
-    hdrs = ["src/cpu/cpu.h"],
+    srcs = [
+        "src/cpu/ic_6502.c",
+        "src/cpu/ic_rp2a03.c",
+    ],
+    hdrs = [
+        "src/cpu/ic_6502.h",
+        "src/cpu/ic_rp2a03.h",
+    ],
     includes = ["src"],
 )
 
