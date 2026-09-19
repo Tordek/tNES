@@ -82,12 +82,12 @@ struct ic_2c02_registers
 struct ic_2c02_bus
 {
   void *context;
-  uint8_t (*read)(void *bus, uint16_t address);
+  void (*read)(uint8_t *restrict data, void *bus, uint16_t address);
   void (*write)(void *bus, uint16_t address, uint8_t data);
 };
 
 int ic_2c02_clock(struct ic_2c02_registers *ppu, struct ic_2c02_bus *bus);
-uint8_t ic_2c02_mmapped_read(struct ic_2c02_registers *device, struct ic_2c02_bus *bus, uint16_t address);
+void ic_2c02_mmapped_read(uint8_t *value, struct ic_2c02_registers *device, struct ic_2c02_bus *bus, uint16_t address);
 void ic_2c02_mmapped_write(struct ic_2c02_registers *device, struct ic_2c02_bus *bus, uint16_t address, uint8_t value);
 void ic_2c02_reset(struct ic_2c02_registers *ppu);
 void ic_2c02_init(struct ic_2c02_registers *ppu);

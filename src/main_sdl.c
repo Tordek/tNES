@@ -4,11 +4,11 @@
 
 #include "rom/rom.h"
 #include "cartridge/cartridge.h"
-#include "machine/machine.h"
-#include "sdl/sdl.h"
 #include "cpu/ic_6502.h"
 #include "cpu/ic_rp2a03.h"
 #include "ppu/ppu.h"
+#include "machine/machine.h"
+#include "sdl/sdl.h"
 
 int main(int argc, char *argv[])
 {
@@ -38,19 +38,31 @@ int main(int argc, char *argv[])
   printf("PRG_ROM size: %d bytes\n", rom.prg_rom_size);
   printf("CHR_ROM size: %d bytes\n", rom.chr_rom_size);
 
-  struct tnes_machine machine;
   struct cartridge *cartridge = cartridge_builder(&rom);
   struct ic_rp2a03_registers cpu;
   struct ic_2c02_registers ppu;
-  machine.cpu = &cpu;
-  machine.ppu = &ppu;
-  machine.cartridge = cartridge;
-  machine.cycles = 0;
-  machine.reset = true;
-  machine.dma_write_time = 0;
+
   cpu.ic_6502.instruction = 0x00;
   cpu.ic_6502.page_jump = 0;
   cpu.ic_6502.nmi_requested = false;
+
+  struct tnes_machine machine = {
+      .cpu = &cpu,
+      .ppu = &ppu,
+      .cartridge = cartridge,
+      .cycles = 0,
+      .reset = true,
+      .cpu_bus = {
+          .context = &machine,
+          .read = cpu_bus_read,
+          .write = cpu_bus_write,
+      },
+      .ppu_bus = {
+          .context = &machine,
+          .read = ppu_bus_read,
+          .write = ppu_bus_write,
+      },
+  };
 
   printf("Starting SDL...\n");
   struct renderer_state *state = initialize_sdl(&machine);

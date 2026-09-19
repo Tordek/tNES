@@ -551,7 +551,8 @@ void print_status(struct tnes_machine *machine)
   struct ic_rp2a03_registers *cpu = machine->cpu;
   struct ic_2c02_registers *ppu = machine->ppu;
 
-  uint8_t opcode = cpu_bus_read(machine, cpu->ic_6502.pc);
+  uint8_t opcode;
+  cpu_bus_read(&opcode, machine, cpu->ic_6502.pc);
 
   printf("%04X  %02X ", cpu->ic_6502.pc, opcode);
   switch (addressing_mode[opcode])
@@ -570,7 +571,8 @@ void print_status(struct tnes_machine *machine)
 
   case ADR_IMM:
   {
-    uint8_t ad = cpu_bus_read(machine, cpu->ic_6502.pc + 1);
+    uint8_t ad;
+    cpu_bus_read(&ad, machine, cpu->ic_6502.pc + 1);
     printf("%02X    %s #$%02X                        ", ad, names[opcode], ad);
   }
   break;
@@ -578,8 +580,10 @@ void print_status(struct tnes_machine *machine)
   case ADR_ZP0:
   {
     // ZP0
-    uint8_t ad = cpu_bus_read(machine, cpu->ic_6502.pc + 1);
-    uint8_t val = cpu_bus_read(machine, ad);
+    uint8_t ad;
+    cpu_bus_read(&ad, machine, cpu->ic_6502.pc + 1);
+    uint8_t val;
+    cpu_bus_read(&val, machine, ad);
 
     printf("%02X    %s $%02X = %02X                    ", ad, names[opcode], ad, val);
   }
@@ -587,54 +591,73 @@ void print_status(struct tnes_machine *machine)
 
   case ADR_ZPX:
   {
-    uint8_t ad = cpu_bus_read(machine, cpu->ic_6502.pc + 1);
+    uint8_t ad;
+    cpu_bus_read(&ad, machine, cpu->ic_6502.pc + 1);
     uint8_t x = (ad + cpu->ic_6502.x) & 0xFF;
-    uint8_t data = cpu_bus_read(machine, x);
+    uint8_t data;
+    cpu_bus_read(&data, machine, x);
     printf("%02X    %s $%02X,X @ %02X = %02X             ", ad, names[opcode], ad, x, data);
   }
   break;
 
   case ADR_ZPY:
   {
-    uint8_t ad = cpu_bus_read(machine, cpu->ic_6502.pc + 1);
+    uint8_t ad;
+    cpu_bus_read(&ad, machine, cpu->ic_6502.pc + 1);
     uint8_t y = (ad + cpu->ic_6502.y) & 0xFF;
-    uint8_t data = cpu_bus_read(machine, y);
+    uint8_t data;
+    cpu_bus_read(&data, machine, y);
     printf("%02X    %s $%02X,Y @ %02X = %02X             ", ad, names[opcode], ad, y, data);
   }
   break;
 
   case ADR_REL:
   {
-    int8_t addr_rel = cpu_bus_read(machine, cpu->ic_6502.pc + 1);
+    int8_t addr_rel;
+    cpu_bus_read(&addr_rel, machine, cpu->ic_6502.pc + 1);
     printf("%02X    %s $%04X                       ", (uint8_t)addr_rel, names[opcode], cpu->ic_6502.pc + addr_rel + 2);
   }
   break;
 
   case ADR_ABSJ:
   {
-    uint16_t lo = cpu_bus_read(machine, cpu->ic_6502.pc + 1);
-    uint16_t hi = cpu_bus_read(machine, cpu->ic_6502.pc + 2);
+    uint8_t read;
+    uint16_t lo;
+    cpu_bus_read(&read, machine, cpu->ic_6502.pc + 1);
+    lo = read;
+    uint16_t hi;
+    cpu_bus_read(&read, machine, cpu->ic_6502.pc + 2);
+    hi = read;
     printf("%02X %02X %s $%04X                       ", lo, hi, names[opcode], hi << 8 | lo);
   }
   break;
 
   case ADR_ABS:
   {
-    uint16_t lo = cpu_bus_read(machine, cpu->ic_6502.pc + 1);
-    uint16_t hi = cpu_bus_read(machine, cpu->ic_6502.pc + 2);
-    uint8_t val = cpu_bus_read(machine, hi << 8 | lo);
+    uint8_t read;
+    uint16_t lo;
+    cpu_bus_read(&read, machine, cpu->ic_6502.pc + 1);
+    lo = read;
+    uint16_t hi;
+    cpu_bus_read(&read, machine, cpu->ic_6502.pc + 2);
+    hi = read;
+    uint8_t val;
+    cpu_bus_read(&val, machine, hi << 8 | lo);
     printf("%02X %02X %s $%04X = %02X                  ", lo, hi, names[opcode], hi << 8 | lo, val);
   }
   break;
 
   case ADR_ABX:
   {
-    uint8_t lo = cpu_bus_read(machine, cpu->ic_6502.pc + 1);
-    uint8_t hi = cpu_bus_read(machine, cpu->ic_6502.pc + 2);
+    uint8_t lo;
+    cpu_bus_read(&lo, machine, cpu->ic_6502.pc + 1);
+    uint8_t hi;
+    cpu_bus_read(&hi, machine, cpu->ic_6502.pc + 2);
 
     uint16_t base = hi << 8 | lo;
     uint16_t addr = base + cpu->ic_6502.x;
-    uint8_t data = cpu_bus_read(machine, addr);
+    uint8_t data;
+    cpu_bus_read(&data, machine, addr);
 
     printf("%02X %02X %s $%04X,X @ %04X = %02X         ", lo, hi, names[opcode], base, addr, data);
   }
@@ -642,13 +665,16 @@ void print_status(struct tnes_machine *machine)
 
   case ADR_ABY:
   {
-    uint8_t lo = cpu_bus_read(machine, cpu->ic_6502.pc + 1);
-    uint8_t hi = cpu_bus_read(machine, cpu->ic_6502.pc + 2);
+    uint8_t lo;
+    cpu_bus_read(&lo, machine, cpu->ic_6502.pc + 1);
+    uint8_t hi;
+    cpu_bus_read(&hi, machine, cpu->ic_6502.pc + 2);
 
     uint16_t base = hi << 8 | lo;
     uint16_t addr = base + cpu->ic_6502.y;
 
-    uint8_t data = cpu_bus_read(machine, addr);
+    uint8_t data;
+    cpu_bus_read(&data, machine, addr);
 
     printf("%02X %02X %s $%04X,Y @ %04X = %02X         ", lo, hi, names[opcode], base, addr, data);
   }
@@ -656,13 +682,19 @@ void print_status(struct tnes_machine *machine)
 
   case ADR_IND:
   {
-    uint8_t lo = cpu_bus_read(machine, cpu->ic_6502.pc + 1);
-    uint8_t hi = cpu_bus_read(machine, cpu->ic_6502.pc + 2);
+    uint8_t lo;
+    cpu_bus_read(&lo, machine, cpu->ic_6502.pc + 1);
+    uint8_t hi;
+    cpu_bus_read(&hi, machine, cpu->ic_6502.pc + 2);
 
     uint16_t addr = hi << 8 | lo;
 
-    uint16_t val = cpu_bus_read(machine, addr);
-    val |= cpu_bus_read(machine, hi << 8 | ((lo + 1) & 0xff)) << 8;
+    uint8_t read;
+    uint16_t val;
+    cpu_bus_read(&read, machine, addr);
+    val = read;
+    cpu_bus_read(&read, machine, hi << 8 | ((lo + 1) & 0xff));
+    val |= read << 8;
 
     printf("%02X %02X %s ($%04X) = %04X              ", lo, hi, names[opcode], addr, val);
   }
@@ -671,13 +703,19 @@ void print_status(struct tnes_machine *machine)
 
   case ADR_IZX:
   {
-    uint8_t ad = cpu_bus_read(machine, cpu->ic_6502.pc + 1);
+    uint8_t ad;
+    cpu_bus_read(&ad, machine, cpu->ic_6502.pc + 1);
 
     uint8_t base = ad + cpu->ic_6502.x;
-    uint16_t addr = cpu_bus_read(machine, base);
-    addr |= cpu_bus_read(machine, (base + 1) & 0xFF) << 8;
+    uint8_t read;
+    uint16_t addr;
+    cpu_bus_read(&read, machine, base);
+    addr = read;
+    cpu_bus_read(&read, machine, (base + 1) & 0xFF);
+    addr |= read << 8;
 
-    uint8_t val = cpu_bus_read(machine, addr);
+    uint8_t val;
+    cpu_bus_read(&val, machine, addr);
     printf("%02X    %s ($%02X,X) @ %02X = %04X = %02X    ", ad, names[opcode], ad, base, addr, val);
   }
 
@@ -685,14 +723,20 @@ void print_status(struct tnes_machine *machine)
 
   case ADR_IZY:
   {
-    uint8_t ad = cpu_bus_read(machine, cpu->ic_6502.pc + 1);
+    uint8_t ad;
+    cpu_bus_read(&ad, machine, cpu->ic_6502.pc + 1);
 
-    uint16_t base = cpu_bus_read(machine, ad);
-    base |= cpu_bus_read(machine, (ad + 1) & 0xFF) << 8;
+    uint8_t read;
+    uint16_t base;
+    cpu_bus_read(&read, machine, ad);
+    base = read;
+    cpu_bus_read(&read, machine, (ad + 1) & 0xFF);
+    base |= read << 8;
 
     uint16_t addr = base + cpu->ic_6502.y;
 
-    uint8_t val = cpu_bus_read(machine, addr);
+    uint8_t val;
+    cpu_bus_read(&val, machine, addr);
     printf("%02X    %s ($%02X),Y = %04X @ %04X = %02X  ", ad, names[opcode], ad, base, addr, val);
   }
 
@@ -730,17 +774,29 @@ int main(int argc, char *argv[])
   // printf("PRG_ROM size: %d bytes\n", rom.prg_rom_size);
   // printf("CHR_ROM size: %d bytes\n", rom.chr_rom_size);
 
-  struct tnes_machine machine;
   struct cartridge *cartridge = cartridge_builder(&rom);
   struct ic_rp2a03_registers cpu;
   struct ic_2c02_registers ppu;
-  machine.cpu = &cpu;
-  machine.ppu = &ppu;
-  machine.cartridge = cartridge;
 
   ic_2c02_init(&ppu);
-  machine.reset = true;
-  memset(machine.main_ram, 0, sizeof(machine.main_ram));
+  struct tnes_machine machine = {
+      .cpu = &cpu,
+      .ppu = &ppu,
+      .cartridge = cartridge,
+      .cycles = 0,
+      .reset = true,
+      .cpu_bus = {
+          .context = &machine,
+          .read = cpu_bus_read,
+          .write = cpu_bus_write,
+      },
+      .ppu_bus = {
+          .context = &machine,
+          .read = ppu_bus_read,
+          .write = ppu_bus_write,
+      },
+      .main_ram = {0},
+  };
 
   // Special Debug mode for NESTEST rom.
   do

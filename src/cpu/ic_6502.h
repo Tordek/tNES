@@ -283,7 +283,7 @@ enum ic_6502_status_enum
 struct ic_6502_bus
 {
   void *context;
-  uint8_t (*read)(void *bus, uint16_t address);
+  void (*read)(uint8_t *restrict data, void *bus, uint16_t address);
   void (*write)(void *bus, uint16_t address, uint8_t data);
 };
 

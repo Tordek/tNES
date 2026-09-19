@@ -26,7 +26,7 @@ struct nes_rom
 
   uint8_t *prg_rom;
   uint8_t *chr_rom;
-  uint8_t *prg_ram;
+  uint16_t prg_ram_size;
 };
 
 enum read_rom_rv

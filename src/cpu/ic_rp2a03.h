@@ -27,10 +27,13 @@ struct ic_rp2a03_registers
   struct controller player2;
 
   int cycles;
+
+  uint16_t dma_page;
+  int dma_write_time;
 };
 
 void ic_rp2a03_tick(struct ic_rp2a03_registers *cpu, struct ic_6502_bus *bus, bool irq, bool reset);
 
-uint8_t ic_rp2a03_mmapped_read(struct ic_rp2a03_registers *cpu, uint16_t address);
+void ic_rp2a03_mmapped_read(uint8_t *restrict value, struct ic_rp2a03_registers *restrict cpu, uint16_t address);
 void ic_rp2a03_mmapped_write(struct ic_rp2a03_registers *cpu, uint16_t address, uint8_t data);
 void ic_rp2a03_nmi(struct ic_rp2a03_registers *cpu);
