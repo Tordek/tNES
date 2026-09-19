@@ -17,6 +17,7 @@ void update_status(union ic_6502_status *status, uint8_t value)
 
 static bool run_break(ic_6502_registers *cpu, struct ic_6502_bus *bus)
 {
+    uint8_t value;
     cpu->cycle++;
 
     switch (cpu->cycle)
@@ -24,11 +25,11 @@ static bool run_break(ic_6502_registers *cpu, struct ic_6502_bus *bus)
     case 1:
         // Read and discard instr lo (Advancing PC is handled in normal Instruction
         // path)
-        bus->read(bus->context, cpu->pc);
+        bus->read(&value, bus->context, cpu->pc);
         return false;
     case 2:
         // Read and discard instr hi
-        bus->read(bus->context, cpu->pc + 1);
+        bus->read(&value, bus->context, cpu->pc + 1);
         return false;
     case 3:
         if (cpu->state == IC_6502_RESET)
@@ -39,7 +40,7 @@ static bool run_break(ic_6502_registers *cpu, struct ic_6502_bus *bus)
             cpu->sp = 0x00;
             cpu->status.raw = 0x20;
             // Fake-push PC >> 8
-            bus->read(bus->context, 0x100 + cpu->sp);
+            bus->read(&value, bus->context, 0x100 + cpu->sp);
         }
         else
         {
@@ -52,7 +53,7 @@ static bool run_break(ic_6502_registers *cpu, struct ic_6502_bus *bus)
         if (cpu->state == IC_6502_RESET)
         {
             // Fake-push PC >> 8
-            bus->read(bus->context, 0x100 + cpu->sp);
+            bus->read(&value, bus->context, 0x100 + cpu->sp);
         }
         else
         {
@@ -64,7 +65,7 @@ static bool run_break(ic_6502_registers *cpu, struct ic_6502_bus *bus)
         if (cpu->state == IC_6502_RESET)
         {
             // Fake-push status
-            bus->read(bus->context, 0x100 + cpu->sp);
+            bus->read(&value, bus->context, 0x100 + cpu->sp);
         }
         else if (cpu->state == IC_6502_INSTRUCTION)
         {
@@ -81,16 +82,20 @@ static bool run_break(ic_6502_registers *cpu, struct ic_6502_bus *bus)
         switch (cpu->state)
         {
         case IC_6502_RESET:
-            cpu->pc = bus->read(bus->context, RES_VECTOR_LO);
+            bus->read(&value, bus->context, RES_VECTOR_LO);
+            cpu->pc = value;
             break;
         case IC_6502_NMI:
-            cpu->pc = bus->read(bus->context, NMI_VECTOR_LO);
+            bus->read(&value, bus->context, NMI_VECTOR_LO);
+            cpu->pc = value;
             break;
         case IC_6502_IRQ:
-            cpu->pc = bus->read(bus->context, IRQ_VECTOR_LO);
+            bus->read(&value, bus->context, IRQ_VECTOR_LO);
+            cpu->pc = value;
             break;
         case IC_6502_INSTRUCTION: // BRK
-            cpu->pc = bus->read(bus->context, IRQ_VECTOR_LO);
+            bus->read(&value, bus->context, IRQ_VECTOR_LO);
+            cpu->pc = value;
             break;
         }
         return false;
@@ -98,16 +103,20 @@ static bool run_break(ic_6502_registers *cpu, struct ic_6502_bus *bus)
         switch (cpu->state)
         {
         case IC_6502_RESET:
-            cpu->pc |= bus->read(bus->context, RES_VECTOR_HI) << 8;
+            bus->read(&value, bus->context, RES_VECTOR_HI);
+            cpu->pc |= value << 8;
             break;
         case IC_6502_NMI:
-            cpu->pc |= bus->read(bus->context, NMI_VECTOR_HI) << 8;
+            bus->read(&value, bus->context, NMI_VECTOR_HI);
+            cpu->pc |= value << 8;
             break;
         case IC_6502_IRQ:
-            cpu->pc |= bus->read(bus->context, IRQ_VECTOR_HI) << 8;
+            bus->read(&value, bus->context, IRQ_VECTOR_HI);
+            cpu->pc |= value << 8;
             break;
         case IC_6502_INSTRUCTION: // BRK
-            cpu->pc |= bus->read(bus->context, IRQ_VECTOR_HI) << 8;
+            bus->read(&value, bus->context, IRQ_VECTOR_HI);
+            cpu->pc |= value << 8;
             break;
         }
         return true;
@@ -174,7 +183,7 @@ static bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
             address = 0xFFFF;
             break;
         }
-        value = bus->read(bus->context, address);
+        bus->read(&value, bus->context, address);
     }
     else
     {

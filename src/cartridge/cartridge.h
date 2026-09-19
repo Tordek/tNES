@@ -7,10 +7,10 @@
 struct cartridge
 {
   void *ctx;
-  uint8_t (*cpu_read)(void *ctx, uint16_t addr);
+  void (*cpu_read)(uint8_t *value, void *ctx, uint16_t addr);
   void (*cpu_write)(void *ctx, uint16_t addr, uint8_t data);
 
-  uint8_t (*ppu_read)(void *ctx, uint8_t *ppu_ram, uint16_t addr);
+  void (*ppu_read)(uint8_t *value, void *ctx, uint8_t *ppu_ram, uint16_t addr);
   void (*ppu_write)(void *ctx, uint8_t *ppu_ram, uint16_t addr, uint8_t data);
 };
 

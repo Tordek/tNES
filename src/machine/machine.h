@@ -15,8 +15,11 @@ struct tnes_machine
   bool reset;
   int sampling_count;
   int cycles;
-  uint16_t dma_page;
-  int dma_write_time;
+  uint8_t cpu_bus_data;
+  uint8_t ppu_bus_data;
+
+  struct ic_6502_bus cpu_bus;
+  struct ic_2c02_bus ppu_bus;
 };
 
 /**
@@ -34,7 +37,7 @@ int tick_machine(struct tnes_machine *machine);
  * @param bus The bus to act on.
  * @param address The address to read from.
  */
-uint8_t cpu_bus_read(void *device, uint16_t address);
+void cpu_bus_read(uint8_t *restrict data, void *device, uint16_t address);
 
 /**
  * Writes byte to `address` in CPU space - exact behavior may depend on the
@@ -53,7 +56,7 @@ void cpu_bus_write(void *device, uint16_t address, uint8_t data);
  * @param bus The bus to act on.
  * @param address The address to read from.
  */
-uint8_t ppu_bus_read(void *device, uint16_t address);
+void ppu_bus_read(uint8_t *restrict data, void *device, uint16_t address);
 
 /**
  * Writes byte to `address` in PPU space - exact behavior may depend on the
