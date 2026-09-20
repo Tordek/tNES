@@ -65,13 +65,11 @@ void ppu_bus_read(uint8_t *result, void *device, uint16_t address)
   struct tnes_machine *machine = (struct tnes_machine *)device;
 
   *result = machine->ppu_bus_data;
-  // The cartridge sees all reads
-  machine->cartridge->ppu_read(result, machine->cartridge, machine->ppu_ram, address);
 
   // The first 0x3f00 are handled by the cartridge
   if (address < 0x3f00)
   {
-    // NOP;
+    machine->cartridge->ppu_read(result, machine->cartridge, machine->ppu_ram, address);
   }
   // The last 0x100 are 8 0x20 mirrors of palette ram
   else if (address < 0x4000)
@@ -86,13 +84,10 @@ void ppu_bus_write(void *device, uint16_t address, uint8_t data)
 {
   struct tnes_machine *machine = (struct tnes_machine *)device;
 
-  // The cartridge sees all writes
-  machine->cartridge->ppu_write(machine->cartridge, machine->ppu_ram, address, data);
-
   // The first 0x3f00 are handled by the cartridge
   if (address < 0x3f00)
   {
-    // NOP
+    machine->cartridge->ppu_write(machine->cartridge, machine->ppu_ram, address, data);
   }
   // The last 0x100 are 8 0x20 mirrors of palette ram
   else if (address < 0x4000)
