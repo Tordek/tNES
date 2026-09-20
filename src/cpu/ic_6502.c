@@ -4,6 +4,8 @@
 
 #include "cpu/ic_6502.h"
 
+#define MAGIC (0xee)
+
 void ic_6502_nmi(ic_6502_registers *cpu)
 {
     cpu->nmi_requested = true;
@@ -482,7 +484,84 @@ static bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
     case UI_ALU_RTI:
         cpu->status.raw &= ~0x10;
         break;
+    case UI_ALU_SLO:
+        cpu->status.c = (value & 0x80) > 0;
+        value <<= 1;
+        cpu->a = cpu->a | value;
+        update_status(&cpu->status, cpu->a);
+        break;
+    case UI_ALU_ANC:
+        value &= cpu->a;
+        cpu->status.c = (value & 0x80) > 0;
+        update_status(&cpu->status, value);
+        break;
+    case UI_ALU_RLA:
+    {
+        bool carry = cpu->status.c;
+        cpu->status.c = (value & 0x80) > 0;
+        value = (value << 1) | carry;
+        cpu->a &= value;
+        update_status(&cpu->status, cpu->a);
+    }
+    break;
+    case UI_ALU_SRE:
+        cpu->status.c = (value & 0x01) > 0;
+        value >>= 1;
+        cpu->a ^= value;
+        update_status(&cpu->status, cpu->a);
+        break;
+    case UI_ALU_ALR:
+        value &= cpu->a;
+        cpu->status.c = (value & 0x01) > 0;
+        value >>= 1;
+        break;
+    case UI_ALU_ARR:
+    {
+        bool carry = cpu->status.c;
+        // cpu->status.c = (value & 0x01) > 0;
+        value &= cpu->a;
+        value = value >> 1 | carry << 7;
+        uint16_t result = (uint16_t)(value & cpu->a);
+        cpu->status.v = (~(value ^ cpu->a) & (result ^ cpu->a) & 0x80) != 0;
+        cpu->status.c = (result & 0xff00) != 0;
+        update_status(&cpu->status, value);
+    }
+    break;
+    case UI_ALU_RRA:
+    {
+        bool carry = cpu->status.c;
+        cpu->status.c = (value & 0x01) > 0;
+        value = (value >> 1) | (carry << 7);
+
+        uint16_t result = (uint16_t)value + cpu->a + cpu->status.c;
+        cpu->status.c = (result & 0xff00) != 0;
+        cpu->status.v = (~(value ^ cpu->a) & (result ^ cpu->a) & 0x80) != 0;
+        cpu->a = result;
+        update_status(&cpu->status, cpu->a);
+    }
+    break;
+    case UI_ALU_XAA:
+        value &= (cpu->a | MAGIC) & cpu->x;
+        break;
+    case UI_ALU_LAX:
+        value &= (cpu->a | MAGIC);
+        break;
+    case UI_ALU_ISC:
+    {
+        value++;
+        uint8_t sub = ~value;
+
+        uint16_t result = (uint16_t)sub + cpu->a + cpu->status.c;
+        cpu->status.c = (result & 0xff00) != 0;
+        cpu->status.v = (~(sub ^ cpu->a) & (result ^ cpu->a) & 0x80) != 0;
+        cpu->a = result;
+        update_status(&cpu->status, cpu->a);
+    }
+    break;
+
     default:
+        printf("Unimplemented ALU operation\n");
+        __builtin_unreachable();
         break;
     }
 
@@ -646,7 +725,16 @@ struct micro_instruction uinstructions[256][20] =
         },
         [KIL_IMP_02] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_PC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_BRK_HI, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_BRK_LO, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_BRK_LO, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_BRK_HI, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_BRK_HI, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_BRK_HI, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_BRK_HI, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_BRK_HI, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_BRK_HI, .alu_op = UI_ALU_NONE, .finished = true},
         },
         [SLO_IZX_03] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -654,7 +742,9 @@ struct micro_instruction uinstructions[256][20] =
             {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SLO, .finished = true},
         },
         [NOP_ZPG_04] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -676,7 +766,9 @@ struct micro_instruction uinstructions[256][20] =
         [SLO_ZPG_07] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ORA, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_SLO, .finished = true},
         },
         [PHP_IMP_08] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -693,7 +785,7 @@ struct micro_instruction uinstructions[256][20] =
         },
         [ANC_IMM_0b] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ANC, .finished = true},
         },
         [NOP_ABS_0c] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -718,7 +810,10 @@ struct micro_instruction uinstructions[256][20] =
         [SLO_ABS_0f] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SLO, .finished = true},
         },
         [BPL_REL_10] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -740,7 +835,13 @@ struct micro_instruction uinstructions[256][20] =
         },
         [SLO_IZY_13] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SLO, .finished = true},
         },
         [NOP_ZPX_14] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -764,7 +865,11 @@ struct micro_instruction uinstructions[256][20] =
         },
         [SLO_ZPX_17] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_SLO, .finished = true},
         },
         [CLC_IMP_18] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -784,7 +889,11 @@ struct micro_instruction uinstructions[256][20] =
         [SLO_ABY_1b] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SLO, .finished = true},
         },
         [NOP_ABX_1c] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -812,7 +921,11 @@ struct micro_instruction uinstructions[256][20] =
         [SLO_ABX_1f] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SLO, .finished = true},
         },
         [JSR_ABS_20] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -840,7 +953,9 @@ struct micro_instruction uinstructions[256][20] =
             {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_RLA, .finished = true},
         },
         [BIT_ZPG_24] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -862,7 +977,9 @@ struct micro_instruction uinstructions[256][20] =
         [RLA_ZPG_27] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_ZP, .alu_op = UI_ALU_RLA, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_RLA, .finished = true},
         },
         [PLP_IMP_28] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -880,7 +997,7 @@ struct micro_instruction uinstructions[256][20] =
         },
         [ANC_IMM_2b] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ANC, .finished = true},
         },
         [BIT_ABS_2c] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -905,7 +1022,10 @@ struct micro_instruction uinstructions[256][20] =
         [RLA_ABS_2f] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_RLA, .finished = true},
         },
         [BMI_REL_30] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -927,7 +1047,13 @@ struct micro_instruction uinstructions[256][20] =
         },
         [RLA_IZY_33] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_RLA, .finished = true},
         },
         [NOP_ZPX_34] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -951,7 +1077,11 @@ struct micro_instruction uinstructions[256][20] =
         },
         [RLA_ZPX_37] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_RLA, .finished = true},
         },
         [SEC_IMP_38] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -971,7 +1101,11 @@ struct micro_instruction uinstructions[256][20] =
         [RLA_ABY_3b] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_RLA, .finished = true},
         },
         [NOP_ABX_3c] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -999,7 +1133,11 @@ struct micro_instruction uinstructions[256][20] =
         [RLA_ABX_3f] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_RLA, .finished = true},
         },
         [RTI_IMP_40] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1027,12 +1165,14 @@ struct micro_instruction uinstructions[256][20] =
             {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SRE, .finished = true},
         },
         [NOP_ZPG_44] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_RLA, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
         },
         [EOR_ZPG_45] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1049,7 +1189,9 @@ struct micro_instruction uinstructions[256][20] =
         [SRE_ZPG_47] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_ZP, .alu_op = UI_ALU_LSR, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_SRE, .finished = true},
         },
         [PHA_IMP_48] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1066,7 +1208,7 @@ struct micro_instruction uinstructions[256][20] =
         },
         [ALR_IMM_4b] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ALR, .finished = true},
         },
         [JMP_ABS_4c] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1090,7 +1232,10 @@ struct micro_instruction uinstructions[256][20] =
         [SRE_ABS_4f] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SRE, .finished = true},
         },
         [BVC_REL_50] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1112,7 +1257,13 @@ struct micro_instruction uinstructions[256][20] =
         },
         [SRE_IZY_53] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SRE, .finished = true},
         },
         [NOP_ZPX_54] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1136,7 +1287,11 @@ struct micro_instruction uinstructions[256][20] =
         },
         [SRE_ZPX_57] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_SRE, .finished = true},
         },
         [CLI_IMP_58] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1156,7 +1311,11 @@ struct micro_instruction uinstructions[256][20] =
         [SRE_ABY_5b] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SRE, .finished = true},
         },
         [NOP_ABX_5c] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1184,7 +1343,11 @@ struct micro_instruction uinstructions[256][20] =
         [SRE_ABX_5f] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SRE, .finished = true},
         },
         [RTS_IMP_60] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1212,7 +1375,9 @@ struct micro_instruction uinstructions[256][20] =
             {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_RRA, .finished = true},
         },
         [NOP_ZPG_64] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1234,7 +1399,9 @@ struct micro_instruction uinstructions[256][20] =
         [RRA_ZPG_67] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_ZP, .alu_op = UI_ALU_RRA, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_RRA, .finished = true},
         },
         [PLA_IMP_68] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1252,7 +1419,7 @@ struct micro_instruction uinstructions[256][20] =
         },
         [ARR_IMM_6b] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ARR, .finished = true},
         },
         [JMP_IND_6c] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1278,7 +1445,10 @@ struct micro_instruction uinstructions[256][20] =
         [RRA_ABS_6f] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_RRA, .finished = true},
         },
         [BVS_REL_70] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1300,7 +1470,13 @@ struct micro_instruction uinstructions[256][20] =
         },
         [RRA_IZY_73] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_RRA, .finished = true},
         },
         [NOP_ZPX_74] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1324,7 +1500,11 @@ struct micro_instruction uinstructions[256][20] =
         },
         [RRA_ZPX_77] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_RRA, .finished = true},
         },
         [SEI_IMP_78] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1344,7 +1524,11 @@ struct micro_instruction uinstructions[256][20] =
         [RRA_ABY_7b] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_RRA, .finished = true},
         },
         [NOP_ABX_7c] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1372,7 +1556,11 @@ struct micro_instruction uinstructions[256][20] =
         [RRA_ABX_7f] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_RRA, .finished = true},
         },
         [NOP_IMM_80] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1432,7 +1620,7 @@ struct micro_instruction uinstructions[256][20] =
         },
         [XAA_IMM_8b] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_XAA, .finished = true},
         },
         [STY_ABS_8c] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1478,7 +1666,13 @@ struct micro_instruction uinstructions[256][20] =
         },
         [AHX_IZY_93] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_AHX, .finished = true},
         },
         [STY_ZPX_94] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1527,7 +1721,11 @@ struct micro_instruction uinstructions[256][20] =
         [SHY_ABX_9c] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SHY, .finished = true},
         },
         [STA_ABX_9d] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1539,12 +1737,20 @@ struct micro_instruction uinstructions[256][20] =
         [SHX_ABY_9e] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SHX, .finished = true},
         },
         [AHX_ABY_9f] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_AHX, .finished = true},
         },
         [LDY_IMM_a0] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1604,7 +1810,7 @@ struct micro_instruction uinstructions[256][20] =
         },
         [LAX_IMM_ab] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_AX, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_AX, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_LAX, .finished = true},
         },
         [LDY_ABS_ac] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1956,7 +2162,9 @@ struct micro_instruction uinstructions[256][20] =
             {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ISC, .finished = true},
         },
         [CPX_ZPG_e4] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -1978,7 +2186,9 @@ struct micro_instruction uinstructions[256][20] =
         [ISC_ZPG_e7] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ISC, .finished = true},
         },
         [INX_IMP_e8] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -2019,7 +2229,10 @@ struct micro_instruction uinstructions[256][20] =
         [ISC_ABS_ef] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ISC, .finished = true},
         },
         [BEQ_REL_f0] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -2041,7 +2254,13 @@ struct micro_instruction uinstructions[256][20] =
         },
         [ISC_IZY_f3] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ISC, .finished = true},
         },
         [NOP_ZPX_f4] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -2065,7 +2284,11 @@ struct micro_instruction uinstructions[256][20] =
         },
         [ISC_ZPX_f7] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ISC, .finished = true},
         },
         [SED_IMP_f8] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -2085,7 +2308,11 @@ struct micro_instruction uinstructions[256][20] =
         [ISC_ABY_fb] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ISC, .finished = true},
         },
         [NOP_ABX_fc] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
@@ -2113,6 +2340,10 @@ struct micro_instruction uinstructions[256][20] =
         [ISC_ABX_ff] = {
             {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
             {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ISC, .finished = true},
         },
 };

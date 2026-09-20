@@ -83,6 +83,7 @@ void ppu_bus_read(uint8_t *result, void *device, uint16_t address)
 void ppu_bus_write(void *device, uint16_t address, uint8_t data)
 {
   struct tnes_machine *machine = (struct tnes_machine *)device;
+  machine->ppu_bus_data = data;
 
   // The first 0x3f00 are handled by the cartridge
   if (address < 0x3f00)

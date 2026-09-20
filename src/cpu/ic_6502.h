@@ -423,6 +423,17 @@ enum ui_alu_op
   UI_ALU_DCP,
   UI_ALU_BRK,
   UI_ALU_RTI,
+  UI_ALU_SLO,
+  UI_ALU_ANC,
+  UI_ALU_SRE,
+  UI_ALU_ALR,
+  UI_ALU_ARR,
+  UI_ALU_XAA,
+  UI_ALU_AHX,
+  UI_ALU_SHY,
+  UI_ALU_SHX,
+  UI_ALU_LAX,
+  UI_ALU_ISC,
 };
 
 enum ui_bus_action
