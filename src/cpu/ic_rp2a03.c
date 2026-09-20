@@ -59,7 +59,7 @@ void ic_rp2a03_mmapped_read(uint8_t *restrict data, struct ic_rp2a03_registers *
     return;
   }
   default:
-    *data = 0;
+    // Open bus
   }
 }
 

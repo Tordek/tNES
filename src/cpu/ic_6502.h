@@ -318,6 +318,7 @@ typedef struct ic_6502_registers
   enum ic_6503_instruction_enum instruction;
   uint8_t op;
   uint8_t zp;
+  uint16_t address_old;
   uint16_t address;
   uint16_t pc_latch;
   int16_t page_jump;
@@ -369,6 +370,7 @@ enum ui_register
   UI_REG_PC_LO,
   UI_REG_PC_LATCH_LO,
   UI_REG_AX,
+  UI_REG_AXS,
 };
 
 enum ui_alu_op
@@ -434,6 +436,9 @@ enum ui_alu_op
   UI_ALU_SHX,
   UI_ALU_LAX,
   UI_ALU_ISC,
+  UI_ALU_TAS,
+  UI_ALU_LAS,
+  UI_ALU_AXS,
 };
 
 enum ui_bus_action

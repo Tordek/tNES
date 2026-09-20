@@ -444,8 +444,8 @@ void ic_2c02_mmapped_read(uint8_t *restrict data, struct ic_2c02_registers *ppu,
     return;
   }
   default:
-    printf("Mmapped reg read not implemented: %x\n", address);
-    // return 0;
+    // Open bus
+    break;
   }
 }
 
