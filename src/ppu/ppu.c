@@ -413,8 +413,6 @@ void ic_2c02_mmapped_read(uint8_t *restrict data, struct ic_2c02_registers *ppu,
   }
   case mmapped_oamdata:
     *data = ppu->primary_oam.raw[ppu->oam_addr];
-    ppu->oam_addr = ppu->oam_addr + 1;
-
     break;
   case mmapped_ppudata:
   {
@@ -489,8 +487,7 @@ void ic_2c02_mmapped_write(struct ic_2c02_registers *ppu, struct ic_2c02_bus *bu
     ppu->oam_addr = value;
     break;
   case mmapped_oamdata:
-    ppu->primary_oam.raw[ppu->oam_addr] = value;
-    ppu->oam_addr++;
+    ppu->primary_oam.raw[ppu->oam_addr++] = value;
     break;
   case mmapped_ppuscroll:
     if (ppu->w == 0)
