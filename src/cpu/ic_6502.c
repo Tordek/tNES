@@ -132,68 +132,123 @@ static bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
     struct micro_instruction i = uinstructions[cpu->instruction][cpu->cycle++];
     bool should_jump = false;
 
-    // Read.
-    uint8_t value;
-    if (i.action == UI_BUS_READ)
+    // Memory op.
+    uint16_t address;
+    switch (i.address)
     {
-        uint16_t address;
-        switch (i.address)
+    case UI_ADDR_PC:
+        address = cpu->pc;
+        break;
+    case UI_ADDR_PC_INC:
+        address = cpu->pc++;
+        break;
+    case UI_ADDR_SP:
+        address = 0x100 + cpu->sp;
+        break;
+    case UI_ADDR_SP_INC:
+        address = 0x100 + cpu->sp++;
+        break;
+    case UI_ADDR_SP_DEC:
+        address = 0x100 + cpu->sp--;
+        break;
+    case UI_ADDR_LATCH:
+        address = cpu->address;
+        if (cpu->page_jump != 0)
         {
-        case UI_ADDR_PC:
-            address = cpu->pc;
-            break;
-        case UI_ADDR_PC_INC:
-            address = cpu->pc++;
-            break;
-        case UI_ADDR_SP:
-            address = 0x100 + cpu->sp;
-            break;
-        case UI_ADDR_SP_INC:
-            address = 0x100 + cpu->sp++;
-            break;
-        case UI_ADDR_LATCH:
-            address = cpu->address;
-            if (cpu->page_jump != 0)
+            cpu->address += cpu->page_jump;
+            cpu->page_jump = 0;
+            should_jump = true;
+
+            uint8_t top = address >> 8;
+            switch (cpu->instruction)
             {
-                cpu->address += cpu->page_jump;
-                cpu->page_jump = 0;
-                should_jump = true;
+            case AHX_IZY_93:
+            case AHX_ABY_9f:
+            case TAS_ABY_9b:
+            {
+                uint8_t badhd = (top + 1) & cpu->a & cpu->x;
+                cpu->address = badhd << 8 | (address & 0xff);
             }
             break;
-        case UI_ADDR_TEMP:
-            address = cpu->address;
+            case SHX_ABY_9e:
+            {
+                uint8_t badhd = (top + 1) & cpu->x;
+                cpu->address = badhd << 8 | (address & 0xff);
+            }
             break;
-        case UI_ADDR_TEMP_INC:
-        {
-            address = cpu->address;
-            uint16_t addition = cpu->address + 1;
-            cpu->address = (cpu->address & 0xff00) | (addition & 0xff);
-            cpu->page_jump = addition - cpu->address;
+            case SHY_ABX_9c:
+            {
+                uint8_t badhd = (top + 1) & cpu->y;
+                cpu->address = badhd << 8 | (address & 0xff);
+            }
+            break;
+            default:
+                break;
+            }
         }
         break;
-        case UI_ADDR_ZP:
-            address = cpu->zp;
+    case UI_ADDR_TEMP:
+        address = cpu->address;
+        break;
+    case UI_ADDR_TEMP_INC:
+    {
+        address = cpu->address;
+        uint16_t addition = cpu->address + 1;
+        cpu->address = (cpu->address & 0xff00) | (addition & 0xff);
+        cpu->page_jump = addition - cpu->address;
+    }
+    break;
+    case UI_ADDR_ZP:
+        address = cpu->zp;
+        break;
+    case UI_ADDR_ZP_INC:
+        address = cpu->zp;
+        cpu->zp++;
+        break;
+    case UI_ADDR_BRK_LO:
+        address = 0xFFFE;
+        break;
+    case UI_ADDR_BRK_HI:
+        address = 0xFFFF;
+        break;
+    }
+
+    if (i.action == UI_BUS_READ)
+    {
+        uint8_t mem_val;
+        bus->read(&mem_val, bus->context, address);
+        switch (i.mem_dst)
+        {
+        case UI_REG_OP:
+            cpu->op = mem_val;
             break;
-        case UI_ADDR_ZP_INC:
-            address = cpu->zp;
-            cpu->zp++;
+        case UI_REG_ZP:
+            cpu->zp = mem_val;
             break;
-        case UI_ADDR_BRK_LO:
-            address = 0xFFFE;
+        case UI_REG_INSTRUCTION:
+            cpu->instruction = mem_val;
             break;
-        case UI_ADDR_BRK_HI:
-            address = 0xFFFF;
+        case UI_REG_TEMP_LO:
+            cpu->address = (cpu->address & 0xff00) | mem_val;
+            break;
+        case UI_REG_TEMP_HI:
+            cpu->address = (cpu->address & 0x00ff) | mem_val << 8;
+            break;
+        default:
             break;
         }
-        bus->read(&value, bus->context, address);
     }
     else
     {
-        switch (i.reg)
+        bus->write(bus->context, address, cpu->op);
+    }
+
+    // Work on data.
+    uint8_t value;
+    {
+        switch (i.src)
         {
         case UI_REG_INSTRUCTION:
-        case UI_REG_TEMP_LO:
-        case UI_REG_TEMP_HI:
         case UI_REG_ZP:
         case UI_REG_PC_LATCH_LO:
         case UI_REG_NONE:
@@ -229,6 +284,12 @@ static bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
         case UI_REG_AX:
             value = cpu->a & cpu->x;
             break;
+        case UI_REG_TEMP_HI:
+            value = cpu->address >> 8;
+            break;
+        case UI_REG_TEMP_LO:
+            value = cpu->address & 0xff;
+            break;
         }
     }
 
@@ -248,40 +309,52 @@ static bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
             cpu->status.v = (~(value ^ cpu->a) & (result ^ cpu->a) & 0x80) != 0;
         }
         value = result;
+        update_status(&cpu->status, value);
     }
     break;
-    case UI_ALU_A:
-        value = cpu->a;
-        break;
-    case UI_ALU_X:
-        value = cpu->x;
-        break;
-    case UI_ALU_Y:
-        value = cpu->y;
-        break;
+    // case UI_ALU_A:
+    //     value = cpu->a;
+    //     update_status(&cpu->status, value);
+    //     break;
+    // case UI_ALU_X:
+    //     value = cpu->x;
+    //     update_status(&cpu->status, value);
+    //     break;
+    // case UI_ALU_Y:
+    //     value = cpu->y;
+    //     update_status(&cpu->status, value);
+    //     break;
     case UI_ALU_SP:
         value = cpu->sp;
+        update_status(&cpu->status, value);
         break;
     case UI_ALU_INX:
         value = cpu->x + 1;
+        update_status(&cpu->status, value);
         break;
     case UI_ALU_INY:
         value = cpu->y + 1;
+        update_status(&cpu->status, value);
         break;
     case UI_ALU_DEX:
         value = cpu->x - 1;
+        update_status(&cpu->status, value);
         break;
     case UI_ALU_DEY:
         value = cpu->y - 1;
+        update_status(&cpu->status, value);
         break;
     case UI_ALU_EOR:
         value ^= cpu->a;
+        update_status(&cpu->status, value);
         break;
     case UI_ALU_ORA:
         value |= cpu->a;
+        update_status(&cpu->status, value);
         break;
     case UI_ALU_AND:
         value &= cpu->a;
+        update_status(&cpu->status, value);
         break;
     case UI_ALU_LSRA:
         value = cpu->a;
@@ -332,6 +405,7 @@ static bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
         uint16_t addition = (cpu->address & 0xff) + cpu->x;
         cpu->address = (cpu->address & 0xff00) | (addition & 0xff);
         cpu->page_jump = addition & 0xff00;
+        value += cpu->x;
     }
     break;
     case UI_ALU_ADDR_ADDY:
@@ -339,6 +413,7 @@ static bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
         uint16_t addition = (cpu->address & 0xff) + cpu->y;
         cpu->address = (cpu->address & 0xff00) | (addition & 0xff);
         cpu->page_jump = addition & 0xff00;
+        value += cpu->y;
         break;
     }
     break;
@@ -515,6 +590,7 @@ static bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
         value &= cpu->a;
         cpu->status.c = (value & 0x01) > 0;
         value >>= 1;
+        update_status(&cpu->status, value);
         break;
     case UI_ALU_ARR:
     {
@@ -541,9 +617,11 @@ static bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
     break;
     case UI_ALU_XAA:
         value &= (cpu->a | MAGIC) & cpu->x;
+        update_status(&cpu->status, value);
         break;
     case UI_ALU_LAX:
         value &= (cpu->a | MAGIC);
+        update_status(&cpu->status, value);
         break;
     case UI_ALU_ISC:
     {
@@ -559,20 +637,36 @@ static bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
     break;
     case UI_ALU_TAS:
         cpu->sp = cpu->a & cpu->x;
-        value = cpu->sp & (((cpu->address_old >> 8) + 1) & 0xff);
-        update_status(&cpu->status, cpu->sp);
+        if (!should_jump)
+        {
+            value++;
+        }
+        value &= cpu->sp;
         break;
     case UI_ALU_SHY:
-        value = cpu->y & ((cpu->address_old >> 8) + 1);
+        if (!should_jump)
+        {
+            value++;
+        }
+        value &= cpu->y;
         break;
     case UI_ALU_SHX:
-        value = cpu->x & ((cpu->address_old >> 8) + 1);
+        if (!should_jump)
+        {
+            value++;
+        }
+        value &= cpu->x;
         break;
     case UI_ALU_AHX:
-        value = cpu->a & cpu->x & ((cpu->address_old >> 8) + 1);
+        if (!should_jump)
+        {
+            value++;
+        }
+        value &= cpu->a & cpu->x;
         break;
     case UI_ALU_LAS:
         value &= cpu->sp;
+        update_status(&cpu->status, value);
         break;
     case UI_ALU_AXS:
     {
@@ -582,7 +676,9 @@ static bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
         cpu->status.c = (result & 0xff00) == 0;
         value = result;
     }
-    break;
+    case UI_ALU_NOP:
+        update_status(&cpu->status, value);
+        break;
 
     default:
         printf("Unimplemented ALU operation\n");
@@ -591,92 +687,62 @@ static bool run_instruction(ic_6502_registers *cpu, struct ic_6502_bus *bus)
     }
 
     // Write
-    if (i.action == UI_BUS_READ)
+    switch (i.dst)
     {
+    case UI_REG_INSTRUCTION:
+        cpu->instruction = value;
+        break;
+    case UI_REG_P:
+        cpu->status.raw = value | 0b00100000;
+        break;
+    case UI_REG_OP:
+        cpu->op = value;
+        break;
+    case UI_REG_A:
         if (!should_jump)
         {
-            switch (i.reg)
-            {
-            case UI_REG_INSTRUCTION:
-                cpu->instruction = value;
-                break;
-            case UI_REG_P:
-                cpu->status.raw = value | 0b00100000;
-                break;
-            case UI_REG_OP:
-                cpu->op = value;
-                update_status(&cpu->status, value);
-                break;
-            case UI_REG_A:
-                cpu->a = value;
-                update_status(&cpu->status, value);
-                break;
-            case UI_REG_X:
-                cpu->x = value;
-                update_status(&cpu->status, value);
-                break;
-            case UI_REG_Y:
-                cpu->y = value;
-                update_status(&cpu->status, value);
-                break;
-            case UI_REG_AXS:
-                cpu->a = value;
-                cpu->x = value;
-                cpu->sp = value;
-                update_status(&cpu->status, value);
-                break;
-            case UI_REG_TEMP_LO:
-                cpu->address = (cpu->address & 0xff00) | value;
-                break;
-            case UI_REG_TEMP_HI:
-                cpu->address = (cpu->address & 0x00ff) | value << 8;
-                break;
-            case UI_REG_PC_LATCH_LO:
-                cpu->pc_latch = (cpu->pc_latch & 0xff00) | value;
-                break;
-            case UI_REG_PC_HI:
-                cpu->pc = (cpu->pc_latch & 0x00ff) | value << 8;
-                break;
-            case UI_REG_SP:
-                cpu->sp = value;
-                break;
-            case UI_REG_ZP:
-                cpu->zp = value;
-                break;
-            case UI_REG_AX:
-                cpu->a = value;
-                cpu->x = value;
-                update_status(&cpu->status, value);
-                break;
-            case UI_REG_NONE:
-            case UI_REG_PC_LO:
-                break;
-            }
+            cpu->a = value;
         }
-    }
-    else
-    {
-        uint16_t address;
-        switch (i.address)
+        break;
+    case UI_REG_X:
+        cpu->x = value;
+        break;
+    case UI_REG_Y:
+        cpu->y = value;
+        break;
+    case UI_REG_AXS:
+        if (!should_jump)
         {
-        case UI_ADDR_SP:
-            address = 0x100 + cpu->sp;
-            break;
-        case UI_ADDR_SP_INC:
-            address = 0x100 + cpu->sp--;
-            break;
-        case UI_ADDR_TEMP:
-            address = cpu->address;
-            break;
-        case UI_ADDR_ZP:
-            address = cpu->zp;
-            break;
-        default:
-            printf("Unimplemented write address\n");
-            __builtin_unreachable();
-            break;
+            cpu->a = value;
+            cpu->x = value;
+            cpu->sp = value;
         }
-        bus->write(bus->context, address, value);
+        break;
+    case UI_REG_TEMP_LO:
+        cpu->address = (cpu->address & 0xff00) | value;
+        break;
+    case UI_REG_TEMP_HI:
+        cpu->address = (cpu->address & 0x00ff) | value << 8;
+        break;
+    case UI_REG_PC_LATCH_LO:
+        cpu->pc_latch = (cpu->pc_latch & 0xff00) | value;
+        break;
+    case UI_REG_PC_HI:
+        cpu->pc = (cpu->pc_latch & 0x00ff) | value << 8;
+        break;
+    case UI_REG_SP:
+        cpu->sp = value;
+        break;
+    case UI_REG_ZP:
+        cpu->zp = value;
+        break;
+    case UI_REG_AX:
+        cpu->a = value;
+        cpu->x = value;
+        break;
+    case UI_REG_NONE:
+    case UI_REG_PC_LO:
+        break;
     }
 
     return i.finished && !should_jump;
@@ -738,1643 +804,1642 @@ void ic_6502_tick(ic_6502_registers *cpu, struct ic_6502_bus *bus, bool irq, boo
 struct micro_instruction uinstructions[256][20] =
     {
         [BRK_IMP_00] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_PC_HI, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_PC_LO, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_P, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_BRK, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_PC_LATCH_LO, .address = UI_ADDR_BRK_LO, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_PC_HI, .address = UI_ADDR_BRK_HI, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_PC_HI, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_SP_DEC, .mem_dst = UI_REG_NONE, .src = UI_REG_PC_LO, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_SP_DEC, .mem_dst = UI_REG_NONE, .src = UI_REG_P, .alu_op = UI_ALU_BRK, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_SP_DEC, .mem_dst = UI_REG_NONE, .src = UI_REG_P, .alu_op = UI_ALU_BRK, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_BRK_LO, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_PC_LATCH_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_BRK_HI, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_PC_HI, .finished = true},
         },
         [ORA_IZX_01] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ORA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ORA, .dst = UI_REG_A, .finished = true},
         },
         [KIL_IMP_02] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_PC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_BRK_HI, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_BRK_LO, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_BRK_LO, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_BRK_HI, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_BRK_HI, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_BRK_HI, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_BRK_HI, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_BRK_HI, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_BRK_HI, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_BRK_HI, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_BRK_LO, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_BRK_LO, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_BRK_HI, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_BRK_HI, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_BRK_HI, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_BRK_HI, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_BRK_HI, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_BRK_HI, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = true},
         },
         [SLO_IZX_03] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SLO, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_SLO, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [NOP_ZPG_04] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [ORA_ZPG_05] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ORA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ORA, .dst = UI_REG_A, .finished = true},
         },
         [ASL_ZPG_06] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ASL, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_ASL, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [SLO_ZPG_07] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_SLO, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_SLO, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [PHP_IMP_08] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_P, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_PHP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_NONE, .src = UI_REG_P, .alu_op = UI_ALU_PHP, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_SP_DEC, .mem_dst = UI_REG_NONE, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [ORA_IMM_09] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ORA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ORA, .dst = UI_REG_A, .finished = true},
         },
         [ASL_IMP_0a] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC, .alu_op = UI_ALU_ASLA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ASLA, .dst = UI_REG_A, .finished = true},
         },
         [ANC_IMM_0b] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ANC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ANC, .dst = UI_REG_A, .finished = true},
         },
         [NOP_ABS_0c] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [ORA_ABS_0d] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ORA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ORA, .dst = UI_REG_A, .finished = true},
         },
         [ASL_ABS_0e] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ASL, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_ASL, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [SLO_ABS_0f] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SLO, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_SLO, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [BPL_REL_10] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_BRANCH_TRY, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_BRANCH_JUMP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_CHECK, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_TRY, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_JUMP, .dst = UI_REG_NONE, .finished = true},
         },
         [ORA_IZY_11] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_ORA, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ORA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ORA, .dst = UI_REG_A, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ORA, .dst = UI_REG_A, .finished = true},
         },
         [KIL_IMP_12] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_INSTRUCTION, .finished = true},
         },
         [SLO_IZY_13] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SLO, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_SLO, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [NOP_ZPX_14] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [ORA_ZPX_15] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ORA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ORA, .dst = UI_REG_A, .finished = true},
         },
         [ASL_ZPX_16] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ASL, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_ASL, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [SLO_ZPX_17] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_SLO, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_SLO, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [CLC_IMP_18] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_CLC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_CLC, .dst = UI_REG_NONE, .finished = true},
         },
         [ORA_ABY_19] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_ORA, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ORA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ORA, .dst = UI_REG_A, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ORA, .dst = UI_REG_A, .finished = true},
         },
         [NOP_IMP_1a] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [SLO_ABY_1b] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SLO, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_SLO, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [NOP_ABX_1c] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [ORA_ABX_1d] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_ORA, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ORA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ORA, .dst = UI_REG_A, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ORA, .dst = UI_REG_A, .finished = true},
         },
         [ASL_ABX_1e] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ASL, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_ASL, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [SLO_ABX_1f] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SLO, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_SLO, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [JSR_ABS_20] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_PC_LATCH_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_SP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_PC_HI, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_PC_LO, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_PC_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_PC_LATCH_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_SP, .mem_dst = UI_REG_NONE, .src = UI_REG_PC_HI, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_SP_DEC, .mem_dst = UI_REG_NONE, .src = UI_REG_PC_LO, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_SP_DEC, .mem_dst = UI_REG_NONE, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_PC_HI, .finished = true},
         },
         [AND_IZX_21] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_AND, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_AND, .dst = UI_REG_A, .finished = true},
         },
         [KIL_IMP_22] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_INSTRUCTION, .finished = true},
         },
         [RLA_IZX_23] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_RLA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_RLA, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [BIT_ZPG_24] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_BIT, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BIT, .dst = UI_REG_NONE, .finished = true},
         },
         [AND_ZPG_25] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_ZP, .alu_op = UI_ALU_AND, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_AND, .dst = UI_REG_A, .finished = true},
         },
         [ROL_ZPG_26] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ROL, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_ROL, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [RLA_ZPG_27] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_RLA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_RLA, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [PLP_IMP_28] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_P, .address = UI_ADDR_SP, .alu_op = UI_ALU_PLP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_SP_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_SP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_PLP, .dst = UI_REG_P, .finished = true},
         },
         [AND_IMM_29] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_AND, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_AND, .dst = UI_REG_A, .finished = true},
         },
         [ROL_IMP_2a] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC, .alu_op = UI_ALU_ROLA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ROLA, .dst = UI_REG_A, .finished = true},
         },
         [ANC_IMM_2b] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ANC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ANC, .dst = UI_REG_A, .finished = true},
         },
         [BIT_ABS_2c] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_BIT, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BIT, .dst = UI_REG_NONE, .finished = true},
         },
         [AND_ABS_2d] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_AND, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_AND, .dst = UI_REG_A, .finished = true},
         },
         [ROL_ABS_2e] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ROL, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_ROL, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [RLA_ABS_2f] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_RLA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_RLA, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [BMI_REL_30] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_BRANCH_TRY, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_BRANCH_JUMP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_CHECK, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_TRY, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_JUMP, .dst = UI_REG_NONE, .finished = true},
         },
         [AND_IZY_31] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_AND, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_AND, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_AND, .dst = UI_REG_A, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_AND, .dst = UI_REG_A, .finished = true},
         },
         [KIL_IMP_32] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_INSTRUCTION, .finished = true},
         },
         [RLA_IZY_33] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_RLA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_RLA, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [NOP_ZPX_34] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [AND_ZPX_35] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_ZP, .alu_op = UI_ALU_AND, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_AND, .dst = UI_REG_A, .finished = true},
         },
         [ROL_ZPX_36] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ROL, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_ROL, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [RLA_ZPX_37] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_RLA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_RLA, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [SEC_IMP_38] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_SEC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_SEC, .dst = UI_REG_NONE, .finished = true},
         },
         [AND_ABY_39] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_AND, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_AND, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_AND, .dst = UI_REG_A, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_AND, .dst = UI_REG_A, .finished = true},
         },
         [NOP_IMP_3a] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [RLA_ABY_3b] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_RLA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_RLA, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [NOP_ABX_3c] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [AND_ABX_3d] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_AND, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_AND, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_AND, .dst = UI_REG_A, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_AND, .dst = UI_REG_A, .finished = true},
         },
         [ROL_ABX_3e] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ROL, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_ROL, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [RLA_ABX_3f] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_RLA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_RLA, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [RTI_IMP_40] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_P, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_PC_LATCH_LO, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_PC_HI, .address = UI_ADDR_SP, .alu_op = UI_ALU_RTI, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_SP_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_SP_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_P, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_SP_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_PC_LATCH_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_SP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_RTI, .dst = UI_REG_PC_HI, .finished = true},
         },
         [EOR_IZX_41] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_EOR, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_EOR, .dst = UI_REG_A, .finished = true},
         },
         [KIL_IMP_42] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_INSTRUCTION, .finished = true},
         },
         [SRE_IZX_43] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SRE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_SRE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [NOP_ZPG_44] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [EOR_ZPG_45] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_ZP, .alu_op = UI_ALU_EOR, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_EOR, .dst = UI_REG_A, .finished = true},
         },
         [LSR_ZPG_46] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_LSR, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_LSR, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [SRE_ZPG_47] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_SRE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_SRE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [PHA_IMP_48] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_A, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_A, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_SP_DEC, .mem_dst = UI_REG_NONE, .src = UI_REG_A, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [EOR_IMM_49] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_EOR, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_EOR, .dst = UI_REG_A, .finished = true},
         },
         [LSR_IMP_4a] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC, .alu_op = UI_ALU_LSRA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_LSRA, .dst = UI_REG_A, .finished = true},
         },
         [ALR_IMM_4b] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ALR, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ALR, .dst = UI_REG_A, .finished = true},
         },
         [JMP_ABS_4c] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_PC_LATCH_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_PC_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_PC_LATCH_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_PC_HI, .finished = true},
         },
         [EOR_ABS_4d] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_EOR, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_EOR, .dst = UI_REG_A, .finished = true},
         },
         [LSR_ABS_4e] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_LSR, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_LSR, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [SRE_ABS_4f] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SRE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_SRE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [BVC_REL_50] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_BRANCH_TRY, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_BRANCH_JUMP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_CHECK, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_TRY, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_JUMP, .dst = UI_REG_NONE, .finished = true},
         },
         [EOR_IZY_51] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_EOR, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_EOR, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_EOR, .dst = UI_REG_A, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_EOR, .dst = UI_REG_A, .finished = true},
         },
         [KIL_IMP_52] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_INSTRUCTION, .finished = true},
         },
         [SRE_IZY_53] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SRE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_SRE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [NOP_ZPX_54] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [EOR_ZPX_55] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_ZP, .alu_op = UI_ALU_EOR, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_EOR, .dst = UI_REG_A, .finished = true},
         },
         [LSR_ZPX_56] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_LSR, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_LSR, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [SRE_ZPX_57] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_SRE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_SRE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [CLI_IMP_58] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_CLI, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_CLI, .dst = UI_REG_NONE, .finished = true},
         },
         [EOR_ABY_59] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_EOR, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_EOR, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_EOR, .dst = UI_REG_A, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_EOR, .dst = UI_REG_A, .finished = true},
         },
         [NOP_IMP_5a] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [SRE_ABY_5b] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SRE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_SRE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [NOP_ABX_5c] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [EOR_ABX_5d] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_EOR, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_EOR, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_EOR, .dst = UI_REG_A, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_EOR, .dst = UI_REG_A, .finished = true},
         },
         [LSR_ABX_5e] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_LSR, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_LSR, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [SRE_ABX_5f] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SRE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_SRE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [RTS_IMP_60] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_PC_LATCH_LO, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_PC_HI, .address = UI_ADDR_SP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_SP_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_SP_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_PC_LATCH_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_SP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_PC_HI, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [ADC_IZX_61] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ADC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ADC, .dst = UI_REG_A, .finished = true},
         },
         [KIL_IMP_62] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_INSTRUCTION, .finished = true},
         },
         [RRA_IZX_63] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_RRA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_RRA, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [NOP_ZPG_64] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [ADC_ZPG_65] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ADC, .dst = UI_REG_A, .finished = true},
         },
         [ROR_ZPG_66] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ROR, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_ROR, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [RRA_ZPG_67] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_RRA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_RRA, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [PLA_IMP_68] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_SP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_SP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_NONE, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_SP_INC, .mem_dst = UI_REG_NONE, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_SP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_A, .finished = true},
         },
         [ADC_IMM_69] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ADC, .dst = UI_REG_A, .finished = true},
         },
         [ROR_IMP_6a] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC, .alu_op = UI_ALU_RORA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_RORA, .dst = UI_REG_A, .finished = true},
         },
         [ARR_IMM_6b] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ARR, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ARR, .dst = UI_REG_A, .finished = true},
         },
         [JMP_IND_6c] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_PC_LATCH_LO, .address = UI_ADDR_TEMP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_PC_HI, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_PC_LATCH_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_PC_HI, .finished = true},
         },
         [ADC_ABS_6d] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ADC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ADC, .dst = UI_REG_A, .finished = true},
         },
         [ROR_ABS_6e] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ROR, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_ROR, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [RRA_ABS_6f] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_RRA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_RRA, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [BVS_REL_70] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_BRANCH_TRY, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_BRANCH_JUMP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_CHECK, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_TRY, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_JUMP, .dst = UI_REG_NONE, .finished = true},
         },
         [ADC_IZY_71] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_ADC, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ADC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ADC, .dst = UI_REG_A, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ADC, .dst = UI_REG_A, .finished = true},
         },
         [KIL_IMP_72] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_INSTRUCTION, .finished = true},
         },
         [RRA_IZY_73] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_RRA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_RRA, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [NOP_ZPX_74] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [ADC_ZPX_75] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ADC, .dst = UI_REG_A, .finished = true},
         },
         [ROR_ZPX_76] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ROR, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_ROR, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [RRA_ZPX_77] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_RRA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_RRA, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [SEI_IMP_78] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_SEI, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_SEI, .dst = UI_REG_NONE, .finished = true},
         },
         [ADC_ABY_79] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_ADC, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ADC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ADC, .dst = UI_REG_A, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ADC, .dst = UI_REG_A, .finished = true},
         },
         [NOP_IMP_7a] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [RRA_ABY_7b] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_RRA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_RRA, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [NOP_ABX_7c] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [ADC_ABX_7d] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_ADC, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ADC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ADC, .dst = UI_REG_A, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ADC, .dst = UI_REG_A, .finished = true},
         },
         [ROR_ABX_7e] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ROR, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_ROR, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [RRA_ABX_7f] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_RRA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_RRA, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [NOP_IMM_80] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [STA_IZX_81] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_A, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_A, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [NOP_IMM_82] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [SAX_IZX_83] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_AX, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_AX, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_AX, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [STY_ZPG_84] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_Y, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_Y, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_Y, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [STA_ZPG_85] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_A, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_A, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [STX_ZPG_86] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_X, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_X, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [SAX_ZPG_87] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_AX, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_AX, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_AX, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [DEY_IMP_88] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_Y, .address = UI_ADDR_PC, .alu_op = UI_ALU_DEY, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_DEY, .dst = UI_REG_Y, .finished = true},
         },
         [NOP_IMM_89] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [TXA_IMP_8a] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC, .alu_op = UI_ALU_X, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_X, .alu_op = UI_ALU_NOP, .dst = UI_REG_A, .finished = true},
         },
         [XAA_IMM_8b] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_XAA, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_XAA, .dst = UI_REG_A, .finished = true},
         },
         [STY_ABS_8c] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_Y, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_Y, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_Y, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [STA_ABS_8d] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_A, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_A, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [STX_ABS_8e] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_X, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_X, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [SAX_ABS_8f] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_AX, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_AX, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_AX, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [BCC_REL_90] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_BRANCH_TRY, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_BRANCH_JUMP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_CHECK, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_TRY, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_JUMP, .dst = UI_REG_NONE, .finished = true},
         },
         [STA_IZY_91] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_A, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_A, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [KIL_IMP_92] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_INSTRUCTION, .finished = true},
         },
         [AHX_IZY_93] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_AHX, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_TEMP_HI, .alu_op = UI_ALU_AHX, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_A, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [STY_ZPX_94] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_Y, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_Y, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_Y, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [STA_ZPX_95] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_A, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_A, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_A, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [STX_ZPY_96] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDY, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_X, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_X, .alu_op = UI_ALU_ZP_ADDY, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_X, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [SAX_ZPY_97] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDY, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_AX, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_AX, .alu_op = UI_ALU_ZP_ADDY, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_X, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [TYA_IMP_98] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC, .alu_op = UI_ALU_Y, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_Y, .alu_op = UI_ALU_NOP, .dst = UI_REG_A, .finished = true},
         },
         [STA_ABY_99] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_A, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_A, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [TXS_IMP_9a] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_SP, .address = UI_ADDR_PC, .alu_op = UI_ALU_X, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_X, .alu_op = UI_ALU_NONE, .dst = UI_REG_SP, .finished = true},
         },
         [TAS_ABY_9b] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_TAS, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_TEMP_HI, .alu_op = UI_ALU_TAS, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [SHY_ABX_9c] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SHY, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_TEMP_HI, .alu_op = UI_ALU_SHY, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [STA_ABX_9d] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_A, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_A, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [SHX_ABY_9e] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SHX, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SHX, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_TEMP_HI, .alu_op = UI_ALU_SHX, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [AHX_ABY_9f] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_AHX, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_AHX, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_TEMP_HI, .alu_op = UI_ALU_AHX, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [LDY_IMM_a0] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_Y, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_Y, .finished = true},
         },
         [LDA_IZX_a1] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_A, .finished = true},
         },
         [LDX_IMM_a2] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_X, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_X, .finished = true},
         },
         [LAX_IZX_a3] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_AX, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_AX, .finished = true},
         },
         [LDY_ZPG_a4] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_Y, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_Y, .finished = true},
         },
         [LDA_ZPG_a5] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_A, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_A, .finished = true},
         },
         [LDX_ZPG_a6] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_X, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_X, .finished = true},
         },
         [LAX_ZPG_a7] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_AX, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_AX, .finished = true},
         },
         [TAY_IMP_a8] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_Y, .address = UI_ADDR_PC, .alu_op = UI_ALU_A, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_A, .alu_op = UI_ALU_NOP, .dst = UI_REG_Y, .finished = true},
         },
         [LDA_IMM_a9] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_A, .finished = true},
         },
         [TAX_IMP_aa] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_X, .address = UI_ADDR_PC, .alu_op = UI_ALU_A, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_A, .alu_op = UI_ALU_NOP, .dst = UI_REG_X, .finished = true},
         },
         [LAX_IMM_ab] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_AX, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_LAX, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_LAX, .dst = UI_REG_AX, .finished = true},
         },
         [LDY_ABS_ac] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_Y, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_Y, .finished = true},
         },
         [LDA_ABS_ad] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_A, .finished = true},
         },
         [LDX_ABS_ae] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_X, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_X, .finished = true},
         },
         [LAX_ABS_af] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_AX, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_AX, .finished = true},
         },
         [BCS_REL_b0] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_BRANCH_TRY, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_BRANCH_JUMP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_CHECK, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_TRY, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_JUMP, .dst = UI_REG_NONE, .finished = true},
         },
         [LDA_IZY_b1] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_A, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_A, .finished = true},
         },
         [KIL_IMP_b2] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_INSTRUCTION, .finished = true},
         },
         [LAX_IZY_b3] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_AX, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_AX, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_AX, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_AX, .finished = true},
         },
         [LDY_ZPX_b4] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_Y, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_Y, .finished = true},
         },
         [LDA_ZPX_b5] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_A, .finished = true},
         },
         [LDX_ZPY_b6] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_X, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDY, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_X, .finished = true},
         },
         [LAX_ZPY_b7] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_AX, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDY, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_AX, .finished = true},
         },
         [CLV_IMP_b8] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_CLV, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_CLV, .dst = UI_REG_NONE, .finished = true},
         },
         [LDA_ABY_b9] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_A, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_A, .finished = true},
         },
         [TSX_IMP_ba] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_X, .address = UI_ADDR_PC, .alu_op = UI_ALU_SP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_SP, .dst = UI_REG_X, .finished = true},
         },
         [LAS_ABY_bb] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_AXS, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_LAS, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_AXS, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_LAS, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_LAS, .dst = UI_REG_AXS, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_LAS, .dst = UI_REG_AXS, .finished = true},
         },
         [LDY_ABX_bc] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_Y, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_Y, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_Y, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_Y, .finished = true},
         },
         [LDA_ABX_bd] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_A, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_A, .finished = true},
         },
         [LDX_ABY_be] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_X, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_X, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_X, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_X, .finished = true},
         },
         [LAX_ABY_bf] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_AX, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_AX, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_AX, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NOP, .dst = UI_REG_AX, .finished = true},
         },
         [CPY_IMM_c0] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_CPY, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_CPY, .dst = UI_REG_NONE, .finished = true},
         },
         [CMP_IZX_c1] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_CMP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_CMP, .dst = UI_REG_NONE, .finished = true},
         },
         [NOP_IMM_c2] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [DCP_IZX_c3] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_DCP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_DCP, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [CPY_ZPG_c4] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_CPY, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_CPY, .dst = UI_REG_NONE, .finished = true},
         },
         [CMP_ZPG_c5] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_CMP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_CMP, .dst = UI_REG_NONE, .finished = true},
         },
         [DEC_ZPG_c6] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_DEC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_DEC, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [DCP_ZPG_c7] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_DCP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_DCP, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [INY_IMP_c8] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_Y, .address = UI_ADDR_PC, .alu_op = UI_ALU_INY, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_INY, .dst = UI_REG_Y, .finished = true},
         },
         [CMP_IMM_c9] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_CMP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_CMP, .dst = UI_REG_NONE, .finished = true},
         },
         [DEX_IMP_ca] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_X, .address = UI_ADDR_PC, .alu_op = UI_ALU_DEX, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_DEX, .dst = UI_REG_X, .finished = true},
         },
         [AXS_IMM_cb] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_X, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_AXS, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_AXS, .dst = UI_REG_X, .finished = true},
         },
         [CPY_ABS_cc] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_CPY, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_CPY, .dst = UI_REG_NONE, .finished = true},
         },
         [CMP_ABS_cd] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_CMP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_CMP, .dst = UI_REG_NONE, .finished = true},
         },
         [DEC_ABS_ce] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_DEC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_DEC, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [DCP_ABS_cf] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_DCP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_DCP, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [BNE_REL_d0] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_BRANCH_TRY, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_BRANCH_JUMP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_CHECK, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_TRY, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_JUMP, .dst = UI_REG_NONE, .finished = true},
         },
         [CMP_IZY_d1] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_CMP, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_CMP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_CMP, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_CMP, .dst = UI_REG_NONE, .finished = true},
         },
         [KIL_IMP_d2] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_INSTRUCTION, .finished = true},
         },
         [DCP_IZY_d3] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_DCP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_DCP, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [NOP_ZPX_d4] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [CMP_ZPX_d5] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_CMP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_CMP, .dst = UI_REG_NONE, .finished = true},
         },
         [DEC_ZPX_d6] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_DEC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_DEC, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [DCP_ZPX_d7] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_DCP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_DCP, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [CLD_IMP_d8] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_CLD, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_CLD, .dst = UI_REG_NONE, .finished = true},
         },
         [CMP_ABY_d9] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_CMP, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_CMP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_CMP, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_CMP, .dst = UI_REG_NONE, .finished = true},
         },
         [NOP_IMP_da] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [DCP_ABY_db] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_DEC, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_DCP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_DEC, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_DCP, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [NOP_ABX_dc] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [CMP_ABX_dd] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_CMP, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_CMP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_CMP, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_CMP, .dst = UI_REG_NONE, .finished = true},
         },
         [DEC_ABX_de] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_DEC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_DEC, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [DCP_ABX_df] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_DCP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_DCP, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [CPX_IMM_e0] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_CPX, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_CPX, .dst = UI_REG_NONE, .finished = true},
         },
         [SBC_IZX_e1] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SBC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_SBC, .dst = UI_REG_A, .finished = true},
         },
         [NOP_IMM_e2] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [ISC_IZX_e3] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ISC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_ISC, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [CPX_ZPG_e4] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_CPX, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_CPX, .dst = UI_REG_NONE, .finished = true},
         },
         [SBC_ZPG_e5] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_ZP, .alu_op = UI_ALU_SBC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_SBC, .dst = UI_REG_A, .finished = true},
         },
         [INC_ZPG_e6] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_INC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_INC, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [ISC_ZPG_e7] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ISC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_ISC, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [INX_IMP_e8] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_X, .address = UI_ADDR_PC, .alu_op = UI_ALU_INX, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_INX, .dst = UI_REG_X, .finished = true},
         },
         [SBC_IMM_e9] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_SBC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_SBC, .dst = UI_REG_A, .finished = true},
         },
         [NOP_IMP_ea] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [SBC_IMM_eb] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_SBC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_SBC, .dst = UI_REG_A, .finished = true},
         },
         [CPX_ABS_ec] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_CPX, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_CPX, .dst = UI_REG_NONE, .finished = true},
         },
         [SBC_ABS_ed] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SBC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_SBC, .dst = UI_REG_A, .finished = true},
         },
         [INC_ABS_ee] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_INC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_INC, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [ISC_ABS_ef] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ISC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_ISC, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [BEQ_REL_f0] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_BRANCH_CHECK, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_BRANCH_TRY, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_BRANCH_JUMP, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_CHECK, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_TRY, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_BRANCH_JUMP, .dst = UI_REG_NONE, .finished = true},
         },
         [SBC_IZY_f1] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_SBC, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SBC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_SBC, .dst = UI_REG_A, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_SBC, .dst = UI_REG_A, .finished = true},
         },
         [KIL_IMP_f2] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_INSTRUCTION, .finished = true},
         },
         [ISC_IZY_f3] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_ZP_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ISC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_ISC, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [NOP_ZPX_f4] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [SBC_ZPX_f5] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_ZP, .alu_op = UI_ALU_SBC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_SBC, .dst = UI_REG_A, .finished = true},
         },
         [INC_ZPX_f6] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_INC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_INC, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [ISC_ZPX_f7] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_ZP, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ZP_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_ZP, .alu_op = UI_ALU_ISC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_ZP, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_ZP_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_ZP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_ISC, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_ZP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [SED_IMP_f8] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_SED, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_SED, .dst = UI_REG_NONE, .finished = true},
         },
         [SBC_ABY_f9] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_SBC, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SBC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_SBC, .dst = UI_REG_A, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_SBC, .dst = UI_REG_A, .finished = true},
         },
         [NOP_IMP_fa] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_PC, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [ISC_ABY_fb] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDY, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ISC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_TEMP_LO, .alu_op = UI_ALU_ADDR_ADDY, .dst = UI_REG_TEMP_LO, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_ISC, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [NOP_ABX_fc] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_NONE, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [SBC_ABX_fd] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_SBC, .finished = true},
-            {.action = UI_BUS_READ, .reg = UI_REG_A, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_SBC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_SBC, .dst = UI_REG_A, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_SBC, .dst = UI_REG_A, .finished = true},
         },
         [INC_ABX_fe] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_INC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_INC, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
         [ISC_ABX_ff] = {
-            {.action = UI_BUS_READ, .reg = UI_REG_INSTRUCTION, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_LO, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_TEMP_HI, .address = UI_ADDR_PC_INC, .alu_op = UI_ALU_ADDR_ADDX, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_LATCH, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_READ, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_NONE, .finished = false},
-            {.action = UI_BUS_WRITE, .reg = UI_REG_OP, .address = UI_ADDR_TEMP, .alu_op = UI_ALU_ISC, .finished = true},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_INSTRUCTION, .src = UI_REG_NONE, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_LO, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_PC_INC, .mem_dst = UI_REG_TEMP_HI, .src = UI_REG_OP, .alu_op = UI_ALU_ADDR_ADDX, .dst = UI_REG_NONE, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_LATCH, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_READ, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_OP, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_ISC, .dst = UI_REG_OP, .finished = false},
+            {.action = UI_BUS_WRITE, .address = UI_ADDR_TEMP, .mem_dst = UI_REG_NONE, .src = UI_REG_OP, .alu_op = UI_ALU_NONE, .dst = UI_REG_NONE, .finished = true},
         },
 };

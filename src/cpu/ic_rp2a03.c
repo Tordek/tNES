@@ -7,22 +7,20 @@
 
 void ic_rp2a03_tick(struct ic_rp2a03_registers *cpu, struct ic_6502_bus *bus, bool irq, bool reset)
 {
-  if (cpu->dma_write_time > 512)
-  {
-    uint8_t val;
-    bus->read(&val, bus->context, cpu->dma_page);
-    cpu->dma_write_time--;
-  }
-  else if (cpu->dma_write_time > 0)
+  cpu->dma_write_phase = !cpu->dma_write_phase;
+
+  if (cpu->dma_write_time > 0)
   {
     cpu->dma_write_time--;
-    // TODO: Read and write on separate cycles.
-    if (cpu->dma_write_time % 2 == 0)
+
+    uint8_t byte = (513 - cpu->dma_write_time) >> 1;
+    if (cpu->dma_write_phase && cpu->dma_write_time <= 512)
     {
-      uint16_t byte = 255 - (cpu->dma_write_time >> 1);
-      uint8_t val;
-      bus->read(&val, bus->context, cpu->dma_page | byte);
-      bus->write(bus->context, 0x2004, val);
+      bus->write(bus->context, 0x2004, cpu->dma_data);
+    }
+    else
+    {
+      bus->read(&cpu->dma_data, bus->context, cpu->dma_page | byte);
     }
   }
   else

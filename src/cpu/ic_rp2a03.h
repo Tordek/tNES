@@ -30,6 +30,8 @@ struct ic_rp2a03_registers
 
   uint16_t dma_page;
   int dma_write_time;
+  uint8_t dma_data;
+  bool dma_write_phase;
 };
 
 void ic_rp2a03_tick(struct ic_rp2a03_registers *cpu, struct ic_6502_bus *bus, bool irq, bool reset);

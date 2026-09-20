@@ -349,11 +349,12 @@ enum ui_address
   UI_ADDR_LATCH,
   UI_ADDR_SP,
   UI_ADDR_SP_INC,
+  UI_ADDR_SP_DEC,
   UI_ADDR_BRK_LO,
   UI_ADDR_BRK_HI
 };
 
-enum ui_register
+enum ui_source
 {
   UI_REG_NONE,
   UI_REG_INSTRUCTION,
@@ -373,9 +374,30 @@ enum ui_register
   UI_REG_AXS,
 };
 
+// enum ui_destination
+// {
+//   UI_REG_NONE,
+//   UI_REG_INSTRUCTION,
+//   UI_REG_P,
+//   UI_REG_A,
+//   UI_REG_X,
+//   UI_REG_Y,
+//   UI_REG_SP,
+//   UI_REG_TEMP_LO,
+//   UI_REG_TEMP_HI,
+//   UI_REG_ZP,
+//   UI_REG_OP,
+//   UI_REG_PC_HI,
+//   UI_REG_PC_LO,
+//   UI_REG_PC_LATCH_LO,
+//   UI_REG_AX,
+//   UI_REG_AXS,
+// };
+
 enum ui_alu_op
 {
   UI_ALU_NONE,
+  UI_ALU_NOP,
   UI_ALU_ADC,
   UI_ALU_SBC,
   UI_ALU_AND,
@@ -451,7 +473,9 @@ struct micro_instruction
 {
   enum ui_bus_action action;
   enum ui_address address;
-  enum ui_register reg;
+  enum ui_source mem_dst;
+  enum ui_source src;
+  enum ui_source dst;
   enum ui_alu_op alu_op;
   bool finished;
 };
