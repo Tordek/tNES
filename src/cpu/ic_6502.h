@@ -461,6 +461,7 @@ enum ui_alu_op
   UI_ALU_TAS,
   UI_ALU_LAS,
   UI_ALU_AXS,
+  UI_ALU_KIL,
 };
 
 enum ui_bus_action

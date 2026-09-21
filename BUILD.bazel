@@ -92,11 +92,18 @@ cc_binary(
     ],
 )
 
-# cc_test(
-#     name = "cpu_test",
-#     srcs = ["tests/cpu_test.c"],
-#     deps = [":cpu"],
-# )
+
+cc_library(
+    name = "cJSON",
+    srcs = ["tests/cJSON.c"],
+    hdrs = ["tests/cJSON.h"],
+    includes = ["src"],
+)
+cc_test(
+    name = "cpu_test",
+    srcs = ["tests/cpu_test.c"],
+    deps = [":cpu", ":cJSON", ":cartridge", ":machine"],
+)
 
 # cc_test(
 #     name = "bus_test",
