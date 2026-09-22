@@ -582,10 +582,8 @@ void print_status(struct tnes_machine *machine)
         // ZP0
         uint8_t ad;
         cpu_bus_read(&ad, machine, cpu->ic_6502.pc + 1);
-        uint8_t val;
-        // cpu_bus_read(&val, machine, ad);
 
-        printf("%02X    %s $%02X = %02X                    ", ad, names[opcode], ad, val);
+        printf("%02X    %s $%02X = %02X                    ", ad, names[opcode], ad);
     }
     break;
 
@@ -594,9 +592,7 @@ void print_status(struct tnes_machine *machine)
         uint8_t ad;
         cpu_bus_read(&ad, machine, cpu->ic_6502.pc + 1);
         uint8_t x = (ad + cpu->ic_6502.x) & 0xFF;
-        uint8_t data;
-        // cpu_bus_read(&data, machine, x);
-        printf("%02X    %s $%02X,X @ %02X = %02X             ", ad, names[opcode], ad, x, data);
+        printf("%02X    %s $%02X,X @ %02X = %02X             ", ad, names[opcode], ad, x);
     }
     break;
 
@@ -605,9 +601,7 @@ void print_status(struct tnes_machine *machine)
         uint8_t ad;
         cpu_bus_read(&ad, machine, cpu->ic_6502.pc + 1);
         uint8_t y = (ad + cpu->ic_6502.y) & 0xFF;
-        uint8_t data;
-        // cpu_bus_read(&data, machine, y);
-        printf("%02X    %s $%02X,Y @ %02X = %02X             ", ad, names[opcode], ad, y, data);
+        printf("%02X    %s $%02X,Y @ %02X                  ", ad, names[opcode], ad, y);
     }
     break;
 
@@ -643,9 +637,7 @@ void print_status(struct tnes_machine *machine)
         uint16_t hi;
         cpu_bus_read(&read, machine, cpu->ic_6502.pc + 2);
         hi = read;
-        uint8_t val;
-        // cpu_bus_read(&val, machine, hi << 8 | lo);
-        printf("%02X %02X %s $%04X = %02X                  ", lo, hi, names[opcode], hi << 8 | lo, val);
+        printf("%02X %02X %s $%04X                       ", lo, hi, names[opcode], hi << 8 | lo);
     }
     break;
 
@@ -658,10 +650,8 @@ void print_status(struct tnes_machine *machine)
 
         uint16_t base = hi << 8 | lo;
         uint16_t addr = base + cpu->ic_6502.x;
-        uint8_t data;
-        // cpu_bus_read(&data, machine, addr);
 
-        printf("%02X %02X %s $%04X,X @ %04X = %02X         ", lo, hi, names[opcode], base, addr, data);
+        printf("%02X %02X %s $%04X,X @ %04X              ", lo, hi, names[opcode], base, addr);
     }
     break;
 
@@ -675,10 +665,7 @@ void print_status(struct tnes_machine *machine)
         uint16_t base = hi << 8 | lo;
         uint16_t addr = base + cpu->ic_6502.y;
 
-        uint8_t data;
-        // cpu_bus_read(&data, machine, addr);
-
-        printf("%02X %02X %s $%04X,Y @ %04X = %02X         ", lo, hi, names[opcode], base, addr, data);
+        printf("%02X %02X %s $%04X,Y @ %04X              ", lo, hi, names[opcode], base, addr);
     }
     break;
 
@@ -690,15 +677,7 @@ void print_status(struct tnes_machine *machine)
         cpu_bus_read(&hi, machine, cpu->ic_6502.pc + 2);
 
         uint16_t addr = hi << 8 | lo;
-
-        uint8_t read;
-        uint16_t val;
-        // cpu_bus_read(&read, machine, addr);
-        val = read;
-        // cpu_bus_read(&read, machine, hi << 8 | ((lo + 1) & 0xff));
-        val |= read << 8;
-
-        printf("%02X %02X %s ($%04X) = %04X              ", lo, hi, names[opcode], addr, val);
+        printf("%02X %02X %s ($%04X)                     ", lo, hi, names[opcode], addr);
     }
 
     break;
@@ -707,18 +686,7 @@ void print_status(struct tnes_machine *machine)
     {
         uint8_t ad;
         cpu_bus_read(&ad, machine, cpu->ic_6502.pc + 1);
-
-        uint8_t base = ad + cpu->ic_6502.x;
-        uint8_t read;
-        uint16_t addr;
-        // cpu_bus_read(&read, machine, base);
-        addr = read;
-        // cpu_bus_read(&read, machine, (base + 1) & 0xFF);
-        addr |= read << 8;
-
-        uint8_t val;
-        // cpu_bus_read(&val, machine, addr);
-        printf("%02X    %s ($%02X,X) @ %02X = %04X = %02X    ", ad, names[opcode], ad, base, addr, val);
+        printf("%02X    %s ($%02X,X)                   ", ad, names[opcode], ad);
     }
 
     break;
@@ -728,18 +696,7 @@ void print_status(struct tnes_machine *machine)
         uint8_t ad;
         cpu_bus_read(&ad, machine, cpu->ic_6502.pc + 1);
 
-        uint8_t read;
-        uint16_t base;
-        // cpu_bus_read(&read, machine, ad);
-        base = read;
-        // cpu_bus_read(&read, machine, (ad + 1) & 0xFF);
-        base |= read << 8;
-
-        uint16_t addr = base + cpu->ic_6502.y;
-
-        uint8_t val;
-        // cpu_bus_read(&val, machine, addr);
-        printf("%02X    %s ($%02X),Y = %04X @ %04X = %02X  ", ad, names[opcode], ad, base, addr, val);
+        printf("%02X    %s ($%02X),Y                   ", ad, names[opcode], ad);
     }
 
     break;

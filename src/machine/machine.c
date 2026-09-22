@@ -25,7 +25,7 @@ void cpu_bus_read(uint8_t *restrict result, void *device, uint16_t address)
   // The next 0x2000 is mirrored as 0x400 8-byte blocks of PPU registers.
   else if (address < 0x4000)
   {
-    ic_2c02_mmapped_read(result, machine->ppu, &machine->ppu_bus, address & 0x2007);
+    ic_2c02_mmapped_read(result, machine->ppu, &machine->ppu_bus, address & 0x07);
   }
   // 0x20 bytes of APU and Controller handling.
   else if (address < 0x4020)
@@ -52,7 +52,7 @@ void cpu_bus_write(void *device, uint16_t address, uint8_t data)
   // The next 0x2000 is mirrored as 0x400 8-byte blocks of PPU registers.
   else if (address < 0x4000)
   {
-    ic_2c02_mmapped_write(machine->ppu, &machine->ppu_bus, address & 0x2007, data);
+    ic_2c02_mmapped_write(machine->ppu, &machine->ppu_bus, address & 0x07, data);
   }
   // 0x20 bytes of APU and Controller handling.
   else if (address < 0x4020)
@@ -61,6 +61,7 @@ void cpu_bus_write(void *device, uint16_t address, uint8_t data)
   }
 }
 
+// TODO: Handle PPU buffer here.
 void ppu_bus_read(uint8_t *result, void *device, uint16_t address)
 {
   struct tnes_machine *machine = (struct tnes_machine *)device;
@@ -123,7 +124,10 @@ int tick_machine(struct tnes_machine *machine)
 
   if (machine->cycles % 3 == 0)
   {
-    if (machine->cpu->ic_6502.cycle == 0) print_status(machine);
+    if (machine->cpu->ic_6502.cycle == 0)
+    {
+      // print_status(machine);
+    }
     ic_rp2a03_tick(machine->cpu, &machine->cpu_bus, false /* machine->apu.irq || machine->cartridge.irq */, machine->reset);
   }
 

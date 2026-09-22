@@ -8,14 +8,14 @@ static void ic_2c02_inc_y(struct ic_2c02_registers *ppu);
 
 enum ic_2c02_mmapped_registers
 {
-  mmapped_ppuctrl = 0x2000,
-  mmapped_ppumask = 0x2001,
-  mmapped_ppustatus = 0x2002,
-  mmapped_oamaddr = 0x2003,
-  mmapped_oamdata = 0x2004,
-  mmapped_ppuscroll = 0x2005,
-  mmapped_ppuaddr = 0x2006,
-  mmapped_ppudata = 0x2007,
+  mmapped_ppuctrl = 0x00,
+  mmapped_ppumask = 0x01,
+  mmapped_ppustatus = 0x02,
+  mmapped_oamaddr = 0x03,
+  mmapped_oamdata = 0x04,
+  mmapped_ppuscroll = 0x05,
+  mmapped_ppuaddr = 0x06,
+  mmapped_ppudata = 0x07,
 };
 
 void ic_2c02_init(struct ic_2c02_registers *ppu)
