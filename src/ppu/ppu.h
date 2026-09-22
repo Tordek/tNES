@@ -74,7 +74,7 @@ struct ic_2c02_registers
   int waste;
 
   uint8_t ppudata_read;
-  // uint8_t palette[0x20];
+  uint8_t palette[0x20];
 
   uint8_t screen[240][256];
 };

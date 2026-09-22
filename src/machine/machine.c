@@ -8,7 +8,7 @@
 #include "machine/machine.h"
 #include "cartridge/cartridge.h"
 
-void cpu_bus_read(uint8_t *result, void *device, uint16_t address)
+void cpu_bus_read(uint8_t *restrict result, void *device, uint16_t address)
 {
   struct tnes_machine *machine = (struct tnes_machine *)device;
   *result = machine->cpu_bus_data;
@@ -74,7 +74,7 @@ void ppu_bus_read(uint8_t *result, void *device, uint16_t address)
   // The last 0x100 are 8 0x20 mirrors of palette ram
   else if (address < 0x4000)
   {
-    *result = machine->palette_ram[address & 0x1f];
+    *result = machine->ppu->palette[address & 0x1f];
   }
 
   machine->ppu_bus_data = *result;
@@ -96,12 +96,12 @@ void ppu_bus_write(void *device, uint16_t address, uint8_t data)
     uint8_t palette_pos = address & 0x1f;
     if ((palette_pos & 0x03) == 0)
     {
-      machine->palette_ram[palette_pos & 0x0F] = data;
-      machine->palette_ram[palette_pos | 0x10] = data;
+      machine->ppu->palette[palette_pos & 0x0F] = data;
+      machine->ppu->palette[palette_pos | 0x10] = data;
     }
     else
     {
-      machine->palette_ram[palette_pos] = data;
+      machine->ppu->palette[palette_pos] = data;
     }
   }
 }

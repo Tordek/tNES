@@ -6,7 +6,6 @@ struct tnes_machine
 {
   uint8_t main_ram[0x800];
   uint8_t ppu_ram[0x800];
-  uint8_t palette_ram[0x20];
 
   struct ic_rp2a03_registers *cpu;
   struct ic_2c02_registers *ppu;

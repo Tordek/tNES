@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "rom/rom.h"
 #include "cartridge/cartridge.h"
@@ -9,6 +10,15 @@
 #include "ppu/ppu.h"
 #include "machine/machine.h"
 #include "sdl/sdl.h"
+
+void mrand(void *target, size_t count)
+{
+  char *ref = target;
+  for (size_t i = 0; i < count; i++)
+  {
+    ref[i] = rand();
+  }
+}
 
 int main(int argc, char *argv[])
 {
@@ -47,28 +57,38 @@ int main(int argc, char *argv[])
   struct ic_rp2a03_registers cpu;
   struct ic_2c02_registers ppu;
 
+  mrand(&cpu, sizeof(cpu));
+  mrand(&ppu, sizeof(ppu));
+
   cpu.ic_6502.instruction = 0x00;
   cpu.ic_6502.page_jump = 0;
   cpu.ic_6502.nmi_requested = false;
+  cpu.cycles = 0;
+  cpu.player1 = (struct controller){0};
+  cpu.player2 = (struct controller){0};
+  cpu.dma_write_time = 0;
 
-  static struct tnes_machine machine;
-  machine = (struct tnes_machine){
+  struct tnes_machine machine = {
       .cpu = &cpu,
       .ppu = &ppu,
       .cartridge = cartridge,
       .cycles = 0,
       .reset = true,
       .cpu_bus = {
+          .context = &machine,
           .read = cpu_bus_read,
           .write = cpu_bus_write,
       },
       .ppu_bus = {
+          .context = &machine,
           .read = ppu_bus_read,
           .write = ppu_bus_write,
       },
   };
-  machine.cpu_bus.context = &machine;
-  machine.ppu_bus.context = &machine;
+
+  cpu.ic_6502.instruction = 0;
+  mrand(&machine.main_ram, sizeof(machine.main_ram));
+
   printf("Starting SDL...\n");
   struct renderer_state *state = initialize_sdl(&machine);
   printf("SDL initialized.\n");

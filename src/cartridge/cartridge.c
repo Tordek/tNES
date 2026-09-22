@@ -104,10 +104,8 @@ struct cartridge *cartridge_builder(struct nes_rom *rom)
         .prg_rom = rom->prg_rom,
         .chr_rom = rom->chr_rom,
     };
-    if (rom->prg_ram_size)
-    {
-      cartridge->prg_ram = malloc(rom->prg_ram_size);
-    }
+    cartridge->prg_ram = malloc(rom->prg_ram_size);
+
     return (struct cartridge *)cartridge;
   }
   default:

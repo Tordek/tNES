@@ -10,7 +10,7 @@ ALL=$(ls ./65x02/nes6502/v1/)
 echo "Building target..."
 bazel build //... --compilation_mode=dbg 
 
-for instruction in $ALL_BUT_KIL; do
+for instruction in $ALL; do
     # echo $instruction;
     ./bazel-bin/cpu_test "./65x02/nes6502/v1/${instruction}" 2>&1 | head -n 2
 done

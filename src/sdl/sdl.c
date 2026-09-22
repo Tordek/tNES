@@ -96,14 +96,14 @@ bool initialize_sdl_video(struct tnes_machine *machine, struct renderer_state *s
     return NULL;
   }
 
-  state->main_window = SDL_CreateWindow("NES", 800, 740, 0);
+  state->main_window = SDL_CreateWindow("NES", 512*2, 381*2, 0);
   if (!state->main_window)
   {
     SDL_Log("Failed to initialize Main Window: %s", SDL_GetError());
     return NULL;
   }
 
-  state->debug_window = SDL_CreateWindow("debug", 800, 740, 0);
+  state->debug_window = SDL_CreateWindow("debug", 800, 740, SDL_WINDOW_HIDDEN);
   if (!state->debug_window)
   {
     SDL_Log("Failed to initialize Debug Window: %s", SDL_GetError());
@@ -271,10 +271,10 @@ void render(struct renderer_state *state)
   SDL_Rect gameDst = {
       .x = 0,
       .y = 0,
-      .w = 512,
-      .h = 480,
+      .w = main_surface->w,
+      .h = main_surface->h,
   };
-  success = SDL_BlitSurfaceScaled(s, &gameSrc, main_surface, &gameDst, SDL_SCALEMODE_NEAREST);
+  success = SDL_BlitSurfaceScaled(s, &gameSrc, main_surface, &gameDst, SDL_SCALEMODE_PIXELART);
   if (!success)
   {
     SDL_Log("Failed to blit surface: %s", SDL_GetError());
@@ -351,14 +351,14 @@ void render(struct renderer_state *state)
     for (int j = 0; j < 64; j++)
     {
       char *pixels = s->pixels;
-      pixels[j] = state->machine->palette_ram[j % 32];
+      pixels[j] = state->machine->ppu->palette[j % 32];
     }
 
     SDL_Rect paletteSrc = {
         .x = 0,
         .y = 0,
         .w = 16,
-        .h = 4,
+        .h = 2,
     };
     SDL_Rect paletteDst = {
         .x = 0,

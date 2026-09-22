@@ -60,7 +60,7 @@ int read_rom(struct nes_rom *rom, FILE *rom_file)
   case TNES_INES:
   {
     // TODO: Support these options.
-    rom->prg_ram_size |= (header_data[8] || 1 * 8192);
+    rom->prg_ram_size |= (header_data[8] || 1) * 0x2000;
     // rom->has_vs_unisystem = !!(header_data[7] & 0x01);
     rom->mapper_id = (header_data[7] & 0xf0) | (header_data[6] >> 4);
     // rom->tv_system = (header_data[0] & 0x01) << 1;
@@ -83,9 +83,11 @@ int read_rom(struct nes_rom *rom, FILE *rom_file)
     // }
     if (header_data[10] & 0x0f)
     {
-      rom->prg_ram_size = 64 << header_data[10] & 0x0f;
-    } else {
-      rom->prg_ram_size = 0;
+      rom->prg_ram_size = 64 << (header_data[10] & 0x0f);
+    }
+    else
+    {
+      rom->prg_ram_size = 0x2000;
     }
   }
   break;
