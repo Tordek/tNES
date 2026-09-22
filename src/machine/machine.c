@@ -5,8 +5,9 @@
 #include "cpu/ic_rp2a03.h"
 #include "ppu/ppu.h"
 #include "rom/rom.h"
-#include "machine/machine.h"
 #include "cartridge/cartridge.h"
+#include "machine/machine.h"
+#include "machine/machine_debug.h"
 
 void cpu_bus_read(uint8_t *restrict result, void *device, uint16_t address)
 {
@@ -122,6 +123,7 @@ int tick_machine(struct tnes_machine *machine)
 
   if (machine->cycles % 3 == 0)
   {
+    if (machine->cpu->ic_6502.cycle == 0) print_status(machine);
     ic_rp2a03_tick(machine->cpu, &machine->cpu_bus, false /* machine->apu.irq || machine->cartridge.irq */, machine->reset);
   }
 

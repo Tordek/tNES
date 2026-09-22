@@ -45,8 +45,11 @@ cc_library(
 
 cc_library(
     name = "machine",
-    srcs = ["src/machine/machine.c"],
-    hdrs = ["src/machine/machine.h"],
+    srcs = ["src/machine/machine.c","src/machine/machine_debug.c",],
+    hdrs = [
+        "src/machine/machine.h",
+        "src/machine/machine_debug.h",
+    ],
     includes = ["src"],
     deps = [
         ":cartridge",
@@ -92,17 +95,22 @@ cc_binary(
     ],
 )
 
-
 cc_library(
     name = "cJSON",
     srcs = ["tests/cJSON.c"],
     hdrs = ["tests/cJSON.h"],
     includes = ["src"],
 )
+
 cc_test(
     name = "cpu_test",
     srcs = ["tests/cpu_test.c"],
-    deps = [":cpu", ":cJSON", ":cartridge", ":machine"],
+    deps = [
+        ":cJSON",
+        ":cartridge",
+        ":cpu",
+        ":machine",
+    ],
 )
 
 # cc_test(
