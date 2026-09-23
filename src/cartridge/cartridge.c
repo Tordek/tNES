@@ -12,6 +12,7 @@ struct mapper_0_cartridge
 {
   struct cartridge base;
   uint8_t *prg_ram;
+  uint16_t prg_ram_size;
   uint16_t nametable_mirroring;
   uint16_t prg_rom_mirroring;
   uint8_t const *prg_rom;
@@ -29,7 +30,7 @@ void cartridge0_read_cpu_bus(uint8_t *restrict data, void *ctx, uint16_t address
   }
   else if (address < 0x8000)
   {
-    *data = cartridge->prg_ram[address & 0x1fff];
+    *data = cartridge->prg_ram[address % cartridge->prg_ram_size];
   }
   else
   {
@@ -47,7 +48,7 @@ void cartridge0_write_cpu_bus(void *ctx, uint16_t address, uint8_t data)
   }
   else if (address < 0x8000)
   {
-    cartridge->prg_ram[address - 0x6000] = data;
+    cartridge->prg_ram[address % cartridge->prg_ram_size] = data;
   }
   else
   {
@@ -103,6 +104,7 @@ struct cartridge *cartridge_builder(struct nes_rom *rom)
         .prg_rom_mirroring = rom->prg_rom_size == 0x4000 ? 0x3fff : 0x7fff,
         .prg_rom = rom->prg_rom,
         .chr_rom = rom->chr_rom,
+        .prg_ram_size = rom->prg_ram_size,
     };
     cartridge->prg_ram = malloc(rom->prg_ram_size);
 
