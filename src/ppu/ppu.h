@@ -22,7 +22,7 @@ struct ic_2c02_registers
   int clock;
   uint8_t mask;
 
-  int pixel;
+  int dot;
   int scanline;
 
   // Background registers
@@ -73,7 +73,8 @@ struct ic_2c02_registers
   int m;
   int waste;
 
-  uint8_t ppudata_read;
+  uint8_t ppudata_buffer;
+  uint8_t ppubus_data;
   uint8_t palette[0x20];
 
   uint8_t screen[240][256];

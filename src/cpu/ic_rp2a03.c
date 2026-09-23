@@ -453,7 +453,7 @@ void ic_rp2a03_mmapped_read(uint8_t *restrict data, struct ic_rp2a03_registers *
 
     uint8_t read = cpu->player1.latch & 0x01;
     cpu->player1.latch = (cpu->player1.latch >> 1) | 0x80;
-    *data = read;
+    *data = (*data & 0xe0) | (read & 0x1f);
     return;
   }
   case 0x17:
@@ -463,8 +463,9 @@ void ic_rp2a03_mmapped_read(uint8_t *restrict data, struct ic_rp2a03_registers *
       cpu->player2.latch = cpu->player2.buttons.raw;
     }
 
-    *data = cpu->player2.latch & 0x01;
+    uint8_t read = cpu->player2.latch & 0x01;
     cpu->player2.latch = (cpu->player2.latch >> 1) | 0x80;
+    *data = (*data & 0xe0) | (read & 0x1f);
     return;
   }
   default:
