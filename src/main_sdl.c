@@ -54,40 +54,12 @@ int main(int argc, char *argv[])
     printf("Failed to load cartridge\n");
     return 1;
   }
-  struct ic_rp2a03_registers cpu;
-  struct ic_2c02_registers ppu;
 
-  mrand(&cpu, sizeof(cpu));
-  mrand(&ppu, sizeof(ppu));
-
-  cpu.ic_6502.instruction = 0x00;
-  cpu.ic_6502.page_jump = 0;
-  cpu.ic_6502.nmi_requested = false;
-  cpu.cycles = 0;
-  cpu.player1 = (struct controller){0};
-  cpu.player2 = (struct controller){0};
-  cpu.dma_write_time = 0;
-
-  struct tnes_machine machine = {
-      .cpu = &cpu,
-      .ppu = &ppu,
-      .cartridge = cartridge,
-      .cycles = 0,
-      .reset = true,
-      .cpu_bus = {
-          .context = &machine,
-          .read = cpu_bus_read,
-          .write = cpu_bus_write,
-      },
-      .ppu_bus = {
-          .context = &machine,
-          .read = ppu_bus_read,
-          .write = ppu_bus_write,
-      },
-  };
-
-  cpu.ic_6502.instruction = 0;
-  mrand(&machine.main_ram, sizeof(machine.main_ram));
+  struct tnes_machine machine;
+  mrand(&machine, sizeof(machine));
+  init_machine(&machine);
+  machine.cartridge = cartridge;
+  machine.reset = true;
 
   printf("Starting SDL...\n");
   struct renderer_state *state = initialize_sdl(&machine);
@@ -98,9 +70,6 @@ int main(int argc, char *argv[])
     return -1;
   }
 
-  ic_2c02_init(&ppu);
-
-  // int max_cycles = 1000000;
   while (1)
   {
     int hsync = tick_machine(&machine);

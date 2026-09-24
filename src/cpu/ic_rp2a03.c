@@ -1,11 +1,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <assert.h>
 
 #include "cpu/ic_6502.h"
 #include "cpu/ic_rp2a03.h"
-
-#define FREQ 48000.0
 
 static uint8_t const length_table[] = {
     10,
@@ -100,52 +99,11 @@ static uint8_t duty_pattern[] = {0x40, 0x60, 0x78, 0x9f};
 
 void ic_rp2a03_init(struct ic_rp2a03_registers *cpu)
 {
-  *cpu = (struct ic_rp2a03_registers){
-      .pulse = {
-          (struct ic_rp2a03_pulse_channel){
-              .duty = 0,
-              .counter_halt_envelope_loop = 0,
-              .constant_volume = 0,
-              .volume = 0,
-              .sweep_shift = 0,
-              .sweep_negate = 0,
-              .sweep_period = 0,
-              .sweep_enable = 0,
-              .sweep_reload = 0,
-              .timer = 0,
-              .length = 0,
-
-              .sweep_counter = 0,
-              .duty_counter = 0,
-              .time = 0,
-              .value = 0,
-          },
-
-          (struct ic_rp2a03_pulse_channel){
-              .duty = 0,
-              .counter_halt_envelope_loop = 0,
-              .constant_volume = 0,
-              .volume = 0,
-              .sweep_shift = 0,
-              .sweep_negate = 0,
-              .sweep_period = 0,
-              .sweep_enable = 0,
-              .sweep_reload = 0,
-              .timer = 0,
-              .length = 0,
-
-              .sweep_counter = 0,
-              .duty_counter = 0,
-              .time = 0,
-              .value = 0,
-          },
-      },
-      .triangle_sequence = 0,
-      .noise_lfsr = 1,
-
-      .divider = 0,
-      .frame_divider = 0,
-  };
+  ic_6502_init(&cpu->ic_6502);
+  cpu->cycles = 0;
+  cpu->dma_write_time = 0;
+  cpu->divider = 0;
+  cpu->frame_divider = 0;
 }
 
 void ic_rp2a03_tick(struct ic_rp2a03_registers *cpu, struct ic_6502_bus *bus, bool irq, bool reset)
@@ -384,12 +342,6 @@ void ic_rp2a03_tick(struct ic_rp2a03_registers *cpu, struct ic_6502_bus *bus, bo
   {
     cpu->frame_divider--;
   }
-
-  uint8_t pulse_group = cpu->pulse[0].value + cpu->pulse[1].value;
-  float pulse_out = pulse_group == 0 ? 0 : 95.88 / (8128.0 / pulse_group + 100);
-  float tnd_group = cpu->triangle_value / 8227.0 + (cpu->noise_value / 12241.0) + 0;
-  float tnd_out = tnd_group == 0 ? 0 : 159.79 / (1 / tnd_group + 100);
-  // return pulse_out + tnd_out;
 }
 
 void ic_rp2a03_mmapped_read(uint8_t *restrict data, struct ic_rp2a03_registers *cpu, uint16_t address)
@@ -416,11 +368,12 @@ void ic_rp2a03_mmapped_read(uint8_t *restrict data, struct ic_rp2a03_registers *
   case 0x0011:
   case 0x0012:
   case 0x0013:
+  case 0x0014:
     // Open.
     break;
   case 0x0015:
   {
-    uint8_t result = 0;
+    *data = 0;
     if (cpu->pulse[0].length > 0)
     {
       *data |= 0x01;
@@ -481,16 +434,16 @@ void ic_rp2a03_mmapped_write(struct ic_rp2a03_registers *cpu, uint16_t address, 
   case 0x0000:
   case 0x0004:
     cpu->pulse[address >> 2].duty = duty_pattern[data >> 6];
-    cpu->pulse[address >> 2].counter_halt_envelope_loop = (data & 0x20) >> 5;
-    cpu->pulse[address >> 2].constant_volume = (data & 0x10) >> 4;
+    cpu->pulse[address >> 2].counter_halt_envelope_loop = (data & 0x20) > 0;
+    cpu->pulse[address >> 2].constant_volume = (data & 0x10) > 0;
     cpu->pulse[address >> 2].volume = (data & 0x0f);
     break;
   case 0x0001:
   case 0x0005:
-    cpu->pulse[address >> 2].sweep_enable = (data & 0x80) >> 7;
-    cpu->pulse[address >> 2].sweep_period = (data & 0x70) >> 4;
-    cpu->pulse[address >> 2].sweep_negate = (data & 0x08) >> 3;
-    cpu->pulse[address >> 2].sweep_shift = (data & 0x07);
+    cpu->pulse[address >> 2].sweep_enable = (data & 0x80) > 0;
+    cpu->pulse[address >> 2].sweep_period = (data & 0x70) > 0;
+    cpu->pulse[address >> 2].sweep_negate = (data & 0x08) > 0;
+    cpu->pulse[address >> 2].sweep_shift = (data & 0x07) > 0;
     cpu->pulse[address >> 2].sweep_reload = 1;
     break;
   case 0x0002:
@@ -509,7 +462,7 @@ void ic_rp2a03_mmapped_write(struct ic_rp2a03_registers *cpu, uint16_t address, 
     cpu->pulse[address >> 2].sweep_mute = 0;
     break;
   case 0x0008:
-    cpu->triangle_counter_halt = data >> 7;
+    cpu->triangle_counter_halt = (data * 0x80) > 0;
     cpu->triangle_counter_load = data & 0x7f;
     break;
   case 0x0009:
@@ -527,15 +480,15 @@ void ic_rp2a03_mmapped_write(struct ic_rp2a03_registers *cpu, uint16_t address, 
     cpu->triangle_counter_reload = 1;
     break;
   case 0x000c:
-    cpu->noise_counter_halt_envelope_loop = (data & 0x20) >> 5;
-    cpu->noise_constant_volume = (data & 0x10) >> 4;
+    cpu->noise_counter_halt_envelope_loop = (data & 0x20) > 0;
+    cpu->noise_constant_volume = (data & 0x10) > 0;
     cpu->noise_volume = data & 0x0f;
     break;
   case 0x000d:
     // Unused
     break;
   case 0x000e:
-    cpu->noise_mode = (data & 0x80) >> 7;
+    cpu->noise_mode = (data & 0x80) > 0;
     cpu->noise_timer = noise_period[data & 0x0f];
     break;
   case 0x000f:
@@ -545,7 +498,7 @@ void ic_rp2a03_mmapped_write(struct ic_rp2a03_registers *cpu, uint16_t address, 
     break;
 
   case 0x0010:
-    cpu->dmc_irq_enable = (data & 0x80) >> 7;
+    cpu->dmc_irq_enable = (data & 0x80) > 0;
     cpu->dmc_loop = (data & 0x40) >> 6;
     cpu->dmc_frequency = data & 0x0f;
     break;

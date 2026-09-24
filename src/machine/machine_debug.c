@@ -548,8 +548,8 @@ enum addressing_mode addressing_mode[256] = {
 
 void print_status(struct tnes_machine *machine)
 {
-    struct ic_rp2a03_registers *cpu = machine->cpu;
-    struct ic_2c02_registers *ppu = machine->ppu;
+    struct ic_rp2a03_registers *cpu = &machine->cpu;
+    struct ic_2c02_registers *ppu = &machine->ppu;
 
     uint8_t opcode;
     cpu_bus_read(&opcode, machine, cpu->ic_6502.pc);
@@ -583,7 +583,7 @@ void print_status(struct tnes_machine *machine)
         uint8_t ad;
         cpu_bus_read(&ad, machine, cpu->ic_6502.pc + 1);
 
-        printf("%02X    %s $%02X = %02X                    ", ad, names[opcode], ad);
+        printf("%02X    %s $%02X                         ", ad, names[opcode], ad);
     }
     break;
 
@@ -592,7 +592,7 @@ void print_status(struct tnes_machine *machine)
         uint8_t ad;
         cpu_bus_read(&ad, machine, cpu->ic_6502.pc + 1);
         uint8_t x = (ad + cpu->ic_6502.x) & 0xFF;
-        printf("%02X    %s $%02X,X @ %02X = %02X             ", ad, names[opcode], ad, x);
+        printf("%02X    %s $%02X,X @ %02X                  ", ad, names[opcode], ad, x);
     }
     break;
 

@@ -1,7 +1,6 @@
-/*
- * The Mapper is the central architecture of the NES:
- * Since each cartridge could add additional hardware, it needs to take care of
- * intercepting requests on both the CPU and PPU buses.
+/**
+ * Since each cartridge could add additional hardware, it needs to intercept
+ * requests on both the CPU and PPU buses.
  */
 
 struct cartridge

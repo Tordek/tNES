@@ -548,8 +548,8 @@ enum addressing_mode addressing_mode[256] = {
 
 void print_status(struct tnes_machine *machine)
 {
-  struct ic_rp2a03_registers *cpu = machine->cpu;
-  struct ic_2c02_registers *ppu = machine->ppu;
+  struct ic_rp2a03_registers *cpu = &machine->cpu;
+  struct ic_2c02_registers *ppu = &machine->ppu;
 
   uint8_t opcode;
   cpu_bus_read(&opcode, machine, cpu->ic_6502.pc);
@@ -777,36 +777,19 @@ int main(int argc, char *argv[])
   // printf("CHR_ROM size: %d bytes\n", rom.chr_rom_size);
 
   struct cartridge *cartridge = cartridge_builder(&rom);
-  struct ic_rp2a03_registers cpu;
-  struct ic_2c02_registers ppu;
 
-  ic_2c02_init(&ppu);
-  struct tnes_machine machine = {
-      .cpu = &cpu,
-      .ppu = &ppu,
-      .cartridge = cartridge,
-      .cycles = 0,
-      .reset = true,
-      .cpu_bus = {
-          .context = &machine,
-          .read = cpu_bus_read,
-          .write = cpu_bus_write,
-      },
-      .ppu_bus = {
-          .context = &machine,
-          .read = ppu_bus_read,
-          .write = ppu_bus_write,
-      },
-      .main_ram = {0},
-  };
+  struct tnes_machine machine;
+
+  init_machine(&machine);
+  machine.cartridge = cartridge;
 
   // Special Debug mode for NESTEST rom.
   do
   {
     tick_machine(&machine);
-  } while (machine.cpu->ic_6502.cycle != 0);
+  } while (machine.cpu.ic_6502.cycle != 0);
 
-  cpu.ic_6502.pc = 0xc000;
+  machine.cpu.ic_6502.pc = 0xc000;
 
   while (machine.cycles < 26555 * 3)
   {
@@ -816,7 +799,7 @@ int main(int argc, char *argv[])
       tick_machine(&machine);
       tick_machine(&machine);
       tick_machine(&machine);
-    } while (machine.cpu->ic_6502.cycle != 0);
+    } while (machine.cpu.ic_6502.cycle != 0);
   }
 
   return 0;

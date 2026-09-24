@@ -40,10 +40,10 @@ void ppu_bus_read_internal(
 
 void ppu_bus_write_internal(struct ic_2c02_registers *ppu, struct ic_2c02_bus *bus, uint16_t address, uint8_t data)
 {
-  bus->write(bus->context, address, data);
   // The first 0x3f00 are handled by the cartridge
   if (address < 0x3f00)
   {
+    bus->write(bus->context, address, data);
   }
   // The last 0x100 are 8 0x20 mirrors of palette ram
   else if (address < 0x4000)

@@ -313,15 +313,15 @@ typedef struct ic_6502_registers
   uint8_t sp;
   uint16_t pc;
 
-  int cycle;
-  enum ic_6502_state state;
-  enum ic_6503_instruction_enum instruction;
   uint8_t op;
   uint8_t zp;
-  uint16_t address_old;
   uint16_t address;
   uint16_t pc_latch;
   int16_t page_jump;
+
+  int cycle;
+  enum ic_6502_state state;
+  enum ic_6503_instruction_enum instruction;
   bool nmi_requested;
   int cycles;
 } ic_6502_registers;
@@ -337,6 +337,8 @@ void ic_6502_nmi(ic_6502_registers *cpu);
  * unlike NMI.
  */
 void ic_6502_tick(ic_6502_registers *cpu, struct ic_6502_bus *bus_ops, bool irq, bool reset);
+
+void ic_6502_init(struct ic_6502_registers *cpu);
 
 enum ui_address
 {

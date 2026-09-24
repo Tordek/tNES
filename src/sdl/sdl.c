@@ -22,54 +22,68 @@ struct renderer_state
 
 void audio_callback(void *userdata, SDL_AudioStream *stream, int additional_amount, int total_amount)
 {
-  // struct tnes_machine *m = (struct tnes_machine *)userdata;
-  // bool success = SDL_PutAudioStreamData(stream, m->audio_buffer, m->audio_buffer_len * 4);
-  // if (!success)
-  // {
-  //   SDL_Log("Failed to put audio into buffer: %s", SDL_GetError());
-  // }
+  struct tnes_machine *m = userdata;
+
+  if (additional_amount <= 0)
+    return;
+
+  size_t requested = (size_t)additional_amount / sizeof(float);
+
+  while (requested > 0 && m->audio_start != m->audio_end)
+  {
+    size_t available;
+
+    if (m->audio_start < m->audio_end)
+    {
+      // Normal case.
+      available = m->audio_end - m->audio_start;
+    }
+    else
+    {
+      // Wrapped: consume up to the physical end of the array.
+      available = AUDIO_BUFFER_SIZE - m->audio_start;
+    }
+
+    size_t count = requested < available ? requested : available;
+
+    bool success = SDL_PutAudioStreamData(
+        stream,
+        &m->audio_samples[m->audio_start],
+        count * sizeof(float));
+
+    if (!success)
+    {
+      SDL_Log(
+          "Failed to put audio into buffer: %s",
+          SDL_GetError());
+      return;
+    }
+
+    m->audio_start =
+        (m->audio_start + count) % AUDIO_BUFFER_SIZE;
+
+    requested -= count;
+  }
 }
 
 bool initialize_sdl_audio(struct tnes_machine *machine, struct renderer_state *state)
 {
   SDL_AudioSpec desired = {
-      .freq = 44100,
+      .freq = 48000,
       .format = SDL_AUDIO_F32,
       .channels = 1,
-      // .samples = 256,
-      // .callback = ic_rp2a03_sdl_audio_callback,
-      // .userdata = &machine,
   };
 
-  SDL_AudioStream *audio_stream = SDL_CreateAudioStream(&desired, NULL);
+  SDL_AudioStream *audio_stream = SDL_OpenAudioDeviceStream(
+      SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,
+      &desired, audio_callback, machine);
   if (audio_stream == NULL)
   {
     SDL_Log("Failed to create audio stream: %s", SDL_GetError());
     return NULL;
   }
-  bool success = SDL_SetAudioStreamGetCallback(audio_stream, audio_callback, machine);
-  if (!success)
-  {
-    SDL_Log("Failed to set audio callback: %s", SDL_GetError());
-    return NULL;
-  }
-  SDL_AudioDeviceID audio = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &desired);
-  if (audio == 0)
-  {
-    SDL_Log("Failed to open audio: %s", SDL_GetError());
-    return NULL;
-  }
-  SDL_AudioSpec preferred_spec;
-  int sample_frames;
-  success = SDL_GetAudioDeviceFormat(audio, &preferred_spec, &sample_frames);
-  if (!success)
-  {
-    SDL_Log("Failed to read audio device format: %s", SDL_GetError());
-    return NULL;
-  }
-  machine->sampling_count = sample_frames * desired.freq;
 
-  success = SDL_PauseAudioDevice(audio);
+  bool success = SDL_ResumeAudioStreamDevice(audio_stream);
   if (!success)
   {
     SDL_Log("Failed to pause audio device: %s", SDL_GetError());
@@ -96,7 +110,7 @@ bool initialize_sdl_video(struct tnes_machine *machine, struct renderer_state *s
     return NULL;
   }
 
-  state->main_window = SDL_CreateWindow("NES", 512*2, 381*2, 0);
+  state->main_window = SDL_CreateWindow("NES", 512 * 2, 381 * 2, 0);
   if (!state->main_window)
   {
     SDL_Log("Failed to initialize Main Window: %s", SDL_GetError());
@@ -260,7 +274,7 @@ void render(struct renderer_state *state)
     SDL_Log("Failed to fill surface: %s", SDL_GetError());
   }
 
-  memcpy(s->pixels, state->machine->ppu->screen, 240 * 256);
+  memcpy(s->pixels, state->machine->ppu.screen, 240 * 256);
 
   SDL_Rect gameSrc = {
       .x = 0,
@@ -351,7 +365,7 @@ void render(struct renderer_state *state)
     for (int j = 0; j < 64; j++)
     {
       char *pixels = s->pixels;
-      pixels[j] = state->machine->ppu->palette[j % 32];
+      pixels[j] = state->machine->ppu.palette[j % 32];
     }
 
     SDL_Rect paletteSrc = {
@@ -421,28 +435,28 @@ int handle_inputs(struct renderer_state *state)
         break;
 
       case SDLK_W:
-        state->machine->cpu->player1.buttons.up = 1;
+        state->machine->cpu.player1.buttons.up = 1;
         break;
       case SDLK_A:
-        state->machine->cpu->player1.buttons.left = 1;
+        state->machine->cpu.player1.buttons.left = 1;
         break;
       case SDLK_S:
-        state->machine->cpu->player1.buttons.down = 1;
+        state->machine->cpu.player1.buttons.down = 1;
         break;
       case SDLK_D:
-        state->machine->cpu->player1.buttons.right = 1;
+        state->machine->cpu.player1.buttons.right = 1;
         break;
       case SDLK_V:
-        state->machine->cpu->player1.buttons.select = 1;
+        state->machine->cpu.player1.buttons.select = 1;
         break;
       case SDLK_B:
-        state->machine->cpu->player1.buttons.start = 1;
+        state->machine->cpu.player1.buttons.start = 1;
         break;
       case SDLK_K:
-        state->machine->cpu->player1.buttons.b = 1;
+        state->machine->cpu.player1.buttons.b = 1;
         break;
       case SDLK_L:
-        state->machine->cpu->player1.buttons.a = 1;
+        state->machine->cpu.player1.buttons.a = 1;
         break;
       }
       break;
@@ -453,28 +467,28 @@ int handle_inputs(struct renderer_state *state)
       switch (ke->key)
       {
       case SDLK_W:
-        state->machine->cpu->player1.buttons.up = 0;
+        state->machine->cpu.player1.buttons.up = 0;
         break;
       case SDLK_A:
-        state->machine->cpu->player1.buttons.left = 0;
+        state->machine->cpu.player1.buttons.left = 0;
         break;
       case SDLK_S:
-        state->machine->cpu->player1.buttons.down = 0;
+        state->machine->cpu.player1.buttons.down = 0;
         break;
       case SDLK_D:
-        state->machine->cpu->player1.buttons.right = 0;
+        state->machine->cpu.player1.buttons.right = 0;
         break;
       case SDLK_V:
-        state->machine->cpu->player1.buttons.select = 0;
+        state->machine->cpu.player1.buttons.select = 0;
         break;
       case SDLK_B:
-        state->machine->cpu->player1.buttons.start = 0;
+        state->machine->cpu.player1.buttons.start = 0;
         break;
       case SDLK_K:
-        state->machine->cpu->player1.buttons.b = 0;
+        state->machine->cpu.player1.buttons.b = 0;
         break;
       case SDLK_L:
-        state->machine->cpu->player1.buttons.a = 0;
+        state->machine->cpu.player1.buttons.a = 0;
         break;
       }
       break;

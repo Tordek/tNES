@@ -17,6 +17,16 @@ void update_status(union ic_6502_status *status, uint8_t value)
     status->n = (value & 0x80) == 0x80;
 }
 
+void ic_6502_init(struct ic_6502_registers *cpu)
+{
+    cpu->instruction = 0x00;
+    cpu->page_jump = 0;
+    cpu->nmi_requested = false;
+    cpu->cycle = 0;
+    cpu->cycles = 0;
+    cpu->state = IC_6502_INSTRUCTION;
+}
+
 static bool run_break(ic_6502_registers *cpu, struct ic_6502_bus *bus)
 {
     uint8_t value;

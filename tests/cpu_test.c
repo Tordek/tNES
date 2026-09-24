@@ -13,18 +13,10 @@
 #include "machine/machine.h"
 
 uint8_t ram[65536];
-// struct flatcart {
-//   struct cartridge base;
-// };
-void cpu_read_nop(uint8_t *value, void *ctx, uint16_t addr) {}
-void cpu_write_nop(void *ctx, uint16_t addr, uint8_t data) {}
-
-void ppu_read_nop(uint8_t *value, void *ctx, uint8_t *ppu_ram, uint16_t addr) {}
-void ppu_write_nop(void *ctx, uint8_t *ppu_ram, uint16_t addr, uint8_t data) {}
-
 uint16_t last_add;
 uint8_t last_val;
 bool last_action;
+
 void tracking_cpu_bus_read(uint8_t *result, void *device, uint16_t address)
 {
   // cpu_bus_read(result, device, address);
@@ -72,31 +64,13 @@ int main(int argc, char *argv[])
   {
     cJSON *name = cJSON_GetObjectItemCaseSensitive(test, "name");
 
-    struct cartridge cartridge = {
-        .cpu_read = cpu_read_nop,
-        .cpu_write = cpu_write_nop,
-        .ppu_read = ppu_read_nop,
-        .ppu_write = ppu_write_nop,
-    };
-    struct ic_rp2a03_registers cpu = {0};
-    struct ic_2c02_registers ppu;
+    struct ic_6502_registers cpu;
+    ic_6502_init(&cpu);
 
-    struct tnes_machine machine = {
-        .cpu = &cpu,
-        .ppu = &ppu,
-        .cartridge = &cartridge,
-        .cycles = 0,
-        .reset = true,
-        .cpu_bus = {
-            .context = &machine,
-            .read = tracking_cpu_bus_read,
-            .write = tracking_cpu_bus_write,
-        },
-        .ppu_bus = {
-            .context = &machine,
-            .read = ppu_bus_read,
-            .write = ppu_bus_write,
-        },
+    struct ic_6502_bus cpu_bus = {
+        .context = NULL,
+        .read = &tracking_cpu_bus_read,
+        .write = &tracking_cpu_bus_write,
     };
 
     cJSON *initial = cJSON_GetObjectItemCaseSensitive(test, "initial");
@@ -106,12 +80,12 @@ int main(int argc, char *argv[])
     cJSON *initial_x = cJSON_GetObjectItemCaseSensitive(initial, "x");
     cJSON *initial_y = cJSON_GetObjectItemCaseSensitive(initial, "y");
     cJSON *initial_p = cJSON_GetObjectItemCaseSensitive(initial, "p");
-    cpu.ic_6502.a = initial_a->valueint;
-    cpu.ic_6502.pc = initial_pc->valueint;
-    cpu.ic_6502.sp = initial_s->valueint;
-    cpu.ic_6502.x = initial_x->valueint;
-    cpu.ic_6502.y = initial_y->valueint;
-    cpu.ic_6502.status.raw = initial_p->valueint;
+    cpu.a = initial_a->valueint;
+    cpu.pc = initial_pc->valueint;
+    cpu.sp = initial_s->valueint;
+    cpu.x = initial_x->valueint;
+    cpu.y = initial_y->valueint;
+    cpu.status.raw = initial_p->valueint;
 
     cJSON *raminit = cJSON_GetObjectItemCaseSensitive(initial, "ram");
     cJSON *ramstep;
@@ -130,11 +104,7 @@ int main(int argc, char *argv[])
     int i = 0;
     cJSON_ArrayForEach(cycle, cycles)
     {
-      // tick_machine(&machine);
-      // tick_machine(&machine);
-      // tick_machine(&machine);
-
-      ic_6502_tick(&cpu.ic_6502, &machine.cpu_bus, false, false);
+      ic_6502_tick(&cpu, &cpu_bus, false, false);
 
       cJSON *addr = cJSON_GetArrayItem(cycle, 0);
       cJSON *value = cJSON_GetArrayItem(cycle, 1);
@@ -166,34 +136,34 @@ int main(int argc, char *argv[])
     cJSON *final_x = cJSON_GetObjectItemCaseSensitive(final, "x");
     cJSON *final_y = cJSON_GetObjectItemCaseSensitive(final, "y");
     cJSON *final_p = cJSON_GetObjectItemCaseSensitive(final, "p");
-    if (cpu.ic_6502.a != final_a->valueint)
+    if (cpu.a != final_a->valueint)
     {
-      printf("Test %s failed: A (%x) doesn't match expected (%x)\n", name->valuestring, cpu.ic_6502.a, final_a->valueint);
+      printf("Test %s failed: A (%x) doesn't match expected (%x)\n", name->valuestring, cpu.a, final_a->valueint);
       fail = true;
     }
-    if (cpu.ic_6502.pc != final_pc->valueint)
+    if (cpu.pc != final_pc->valueint)
     {
-      printf("Test %s failed: PC (%x) doesn't match expected (%x)\n", name->valuestring, cpu.ic_6502.pc, final_pc->valueint);
+      printf("Test %s failed: PC (%x) doesn't match expected (%x)\n", name->valuestring, cpu.pc, final_pc->valueint);
       fail = true;
     }
-    if (cpu.ic_6502.sp != final_s->valueint)
+    if (cpu.sp != final_s->valueint)
     {
-      printf("Test %s failed: SP (%x) doesn't match expected (%x)\n", name->valuestring, cpu.ic_6502.sp, final_s->valueint);
+      printf("Test %s failed: SP (%x) doesn't match expected (%x)\n", name->valuestring, cpu.sp, final_s->valueint);
       fail = true;
     }
-    if (cpu.ic_6502.x != final_x->valueint)
+    if (cpu.x != final_x->valueint)
     {
-      printf("Test %s failed: X (%x) doesn't match expected (%x)\n", name->valuestring, cpu.ic_6502.x, final_x->valueint);
+      printf("Test %s failed: X (%x) doesn't match expected (%x)\n", name->valuestring, cpu.x, final_x->valueint);
       fail = true;
     }
-    if (cpu.ic_6502.y != final_y->valueint)
+    if (cpu.y != final_y->valueint)
     {
-      printf("Test %s failed: Y (%x) doesn't match expected (%x)\n", name->valuestring, cpu.ic_6502.y, final_y->valueint);
+      printf("Test %s failed: Y (%x) doesn't match expected (%x)\n", name->valuestring, cpu.y, final_y->valueint);
       fail = true;
     }
-    if (cpu.ic_6502.status.raw != final_p->valueint)
+    if (cpu.status.raw != final_p->valueint)
     {
-      printf("Test %s failed: P (%x) doesn't match expected (%x)\n", name->valuestring, cpu.ic_6502.status.raw, final_p->valueint);
+      printf("Test %s failed: P (%x) doesn't match expected (%x)\n", name->valuestring, cpu.status.raw, final_p->valueint);
       fail = true;
     }
 
