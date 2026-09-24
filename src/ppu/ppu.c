@@ -321,6 +321,7 @@ int ic_2c02_clock(struct ic_2c02_registers *ppu, struct ic_2c02_bus *bus)
 
   // Sprite evaluation
   if (ppu->mask & 0x18)
+  {
     if (0 < dot && dot < 65)
     {
       ppu->secondary_oam.raw[dot & 0x1f] = 0xFF;
@@ -417,6 +418,7 @@ int ic_2c02_clock(struct ic_2c02_registers *ppu, struct ic_2c02_bus *bus)
     else if (dot == 340)
     {
     }
+  }
 
   ppu->dot++;
 
