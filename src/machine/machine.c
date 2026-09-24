@@ -94,6 +94,7 @@ void init_machine(struct tnes_machine *machine)
 
   machine->audio_start = 0;
   machine->audio_end = 0;
+  machine->sample_count = 0;
 
   ic_rp2a03_init(&machine->cpu);
   ic_2c02_init(&machine->ppu);

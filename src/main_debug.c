@@ -779,9 +779,11 @@ int main(int argc, char *argv[])
   struct cartridge *cartridge = cartridge_builder(&rom);
 
   struct tnes_machine machine;
+  memset(&machine, 0, sizeof(machine));
 
   init_machine(&machine);
   machine.cartridge = cartridge;
+  machine.reset = true;
 
   // Special Debug mode for NESTEST rom.
   do

@@ -135,212 +135,286 @@ void ic_rp2a03_tick(struct ic_rp2a03_registers *cpu, struct ic_6502_bus *bus, bo
     ic_6502_tick(&cpu->ic_6502, bus, irq, reset);
   }
 
-  if (cpu->divider == 0)
+  if (reset)
   {
-    cpu->divider = 1;
 
-    for (int i = 0; i < 2; i++)
+    cpu->pulse[0] = (struct ic_rp2a03_pulse_channel){
+        .duty = 0,
+        .counter_halt_envelope_loop = 0,
+        .constant_volume = 0,
+        .volume = 0,
+        .sweep_shift = 0,
+        .sweep_negate = 0,
+        .sweep_period = 0,
+        .sweep_enable = 0,
+        .sweep_reload = 0,
+        .timer = 0,
+        .length = 0,
+
+        .sweep_counter = 0,
+        .duty_counter = 0,
+        .time = 0,
+        .value = 0,
+    };
+
+    cpu->pulse[1] = (struct ic_rp2a03_pulse_channel){
+        .duty = 0,
+        .counter_halt_envelope_loop = 0,
+        .constant_volume = 0,
+        .volume = 0,
+        .sweep_shift = 0,
+        .sweep_negate = 0,
+        .sweep_period = 0,
+        .sweep_enable = 0,
+        .sweep_reload = 0,
+        .timer = 0,
+        .length = 0,
+
+        .sweep_counter = 0,
+        .duty_counter = 0,
+        .time = 0,
+        .value = 0,
+    };
+
+    cpu->noise_counter_halt_envelope_loop = 0;
+    cpu->noise_envelope_decay_counter = 0;
+    cpu->noise_envelope_divider = 0;
+    cpu->noise_envelope_start = 0;
+
+    cpu->frame_counter = 0;
+    cpu->frame_counter_mode = 0;
+    cpu->frame_divider = 0;
+
+    cpu->triangle_value = 0;
+    cpu->triangle_counter_halt = 0;
+    cpu->triangle_length = 0;
+    cpu->triangle_sequence = 0;
+    cpu->triangle_linear_counter = 0;
+    cpu->triangle_time = 0;
+    cpu->triangle_timer = 0;
+    cpu->triangle_counter_load = 0;
+    cpu->triangle_counter_reload = 0;
+
+    cpu->noise_lfsr = 1;
+    cpu->noise_mode = 0;
+    cpu->noise_length = 0;
+    cpu->noise_envelope_divider = 0;
+    cpu->noise_volume = 0;
+
+    cpu->divider = 0;
+
+    cpu->player1 = (struct controller){0};
+    cpu->player2 = (struct controller){0};
+  }
+  else
+  {
+    if (cpu->divider == 0)
     {
-      if (cpu->pulse[i].time == 0)
-      {
-        cpu->pulse[i].time = cpu->pulse[i].timer;
-        cpu->pulse[i].duty_counter = (cpu->pulse[i].duty_counter + 1) % 8;
+      cpu->divider = 1;
 
-        if ((cpu->pulse[i].duty & (1 << cpu->pulse[i].duty_counter)) == 0 || cpu->pulse[i].sweep_mute || cpu->pulse[i].length == 0 || cpu->pulse[i].timer < 8)
+      for (int i = 0; i < 2; i++)
+      {
+        if (cpu->pulse[i].time == 0)
         {
-          cpu->pulse[i].value = 0;
+          cpu->pulse[i].time = cpu->pulse[i].timer;
+          cpu->pulse[i].duty_counter = (cpu->pulse[i].duty_counter + 1) % 8;
+
+          if ((cpu->pulse[i].duty & (1 << cpu->pulse[i].duty_counter)) == 0 || cpu->pulse[i].sweep_mute || cpu->pulse[i].length == 0 || cpu->pulse[i].timer < 8)
+          {
+            cpu->pulse[i].value = 0;
+          }
+          else
+          {
+            cpu->pulse[i].value = cpu->pulse[i].constant_volume ? cpu->pulse[i].volume : cpu->pulse[i].envelope_decay_counter;
+          }
         }
         else
         {
-          cpu->pulse[i].value = cpu->pulse[i].constant_volume ? cpu->pulse[i].volume : cpu->pulse[i].envelope_decay_counter;
+          cpu->pulse[i].time--;
         }
+      }
+
+      uint16_t feedback_bit = cpu->noise_lfsr >> (cpu->noise_mode ? 6 : 1) & 0x0001;
+      feedback_bit ^= cpu->noise_lfsr & 0x0001;
+      cpu->noise_lfsr = feedback_bit << 14 | cpu->noise_lfsr >> 1;
+      if (cpu->noise_length == 0 || (cpu->noise_lfsr & 0x0001))
+      {
+        cpu->noise_value = 0;
       }
       else
       {
-        cpu->pulse[i].time--;
+        cpu->noise_value = cpu->noise_constant_volume ? cpu->noise_volume : cpu->noise_envelope_decay_counter;
       }
-    }
-
-    uint16_t feedback_bit = cpu->noise_lfsr >> (cpu->noise_mode ? 6 : 1) & 0x0001;
-    feedback_bit ^= cpu->noise_lfsr & 0x0001;
-    cpu->noise_lfsr = feedback_bit << 14 | cpu->noise_lfsr >> 1;
-    if (cpu->noise_length == 0 || (cpu->noise_lfsr & 0x0001))
-    {
-      cpu->noise_value = 0;
     }
     else
     {
-      cpu->noise_value = cpu->noise_constant_volume ? cpu->noise_volume : cpu->noise_envelope_decay_counter;
-    }
-  }
-  else
-  {
-    cpu->divider--;
-  }
-
-  if (cpu->triangle_time == 0)
-  {
-    cpu->triangle_time = cpu->triangle_timer;
-    if (cpu->triangle_linear_counter > 0 && cpu->triangle_length > 0)
-    {
-      cpu->triangle_sequence = (cpu->triangle_sequence + 1) % 32;
-      cpu->triangle_value = triangle_sequencer[cpu->triangle_sequence];
-    }
-  }
-  else
-  {
-    cpu->triangle_time--;
-  }
-
-  if (cpu->frame_divider == 0)
-  {
-    cpu->frame_divider = 1789773 / 240;
-
-    // Skip frame 5 in mode 0
-    if (cpu->frame_counter_mode == 0 && cpu->frame_counter == 4)
-    {
-      cpu->frame_counter = 3;
+      cpu->divider--;
     }
 
-    // Every frame count
-    if (cpu->triangle_counter_reload)
+    if (cpu->triangle_time == 0)
     {
-      cpu->triangle_linear_counter = cpu->triangle_counter_load;
-    }
-    else if (cpu->triangle_linear_counter > 0)
-    {
-      cpu->triangle_linear_counter--;
-    }
-
-    for (int i = 0; i < 2; i++)
-    {
-      if (cpu->pulse[i].envelope_start)
+      cpu->triangle_time = cpu->triangle_timer;
+      if (cpu->triangle_linear_counter > 0 && cpu->triangle_length > 0)
       {
-        cpu->pulse[i].envelope_start = 0;
-        cpu->pulse[i].envelope_decay_counter = 15;
-        cpu->pulse[i].envelope_divider = cpu->pulse[i].volume;
+        cpu->triangle_sequence = (cpu->triangle_sequence + 1) % 32;
+        cpu->triangle_value = triangle_sequencer[cpu->triangle_sequence];
       }
-      else
+    }
+    else
+    {
+      cpu->triangle_time--;
+    }
+
+    if (cpu->frame_divider == 0)
+    {
+      cpu->frame_divider = 1789773 / 240;
+
+      // Skip frame 5 in mode 0
+      if (cpu->frame_counter_mode == 0 && cpu->frame_counter == 4)
       {
-        if (cpu->pulse[i].envelope_divider == 0)
+        cpu->frame_counter = 3;
+      }
+
+      // Every frame count
+      if (cpu->triangle_counter_reload)
+      {
+        cpu->triangle_linear_counter = cpu->triangle_counter_load;
+      }
+      else if (cpu->triangle_linear_counter > 0)
+      {
+        cpu->triangle_linear_counter--;
+      }
+
+      for (int i = 0; i < 2; i++)
+      {
+        if (cpu->pulse[i].envelope_start)
         {
+          cpu->pulse[i].envelope_start = 0;
+          cpu->pulse[i].envelope_decay_counter = 15;
           cpu->pulse[i].envelope_divider = cpu->pulse[i].volume;
-          if (cpu->pulse[i].envelope_decay_counter == 0)
+        }
+        else
+        {
+          if (cpu->pulse[i].envelope_divider == 0)
           {
-            if (cpu->pulse[i].counter_halt_envelope_loop)
+            cpu->pulse[i].envelope_divider = cpu->pulse[i].volume;
+            if (cpu->pulse[i].envelope_decay_counter == 0)
             {
-              cpu->pulse[i].envelope_decay_counter = 15;
+              if (cpu->pulse[i].counter_halt_envelope_loop)
+              {
+                cpu->pulse[i].envelope_decay_counter = 15;
+              }
+            }
+            else
+            {
+              cpu->pulse[i].envelope_decay_counter--;
             }
           }
           else
           {
-            cpu->pulse[i].envelope_decay_counter--;
+            cpu->pulse[i].envelope_divider--;
           }
-        }
-        else
-        {
-          cpu->pulse[i].envelope_divider--;
         }
       }
-    }
 
-    if (cpu->noise_envelope_start)
-    {
-      cpu->noise_envelope_start = 0;
-      cpu->noise_envelope_decay_counter = 15;
-      cpu->noise_envelope_divider = cpu->noise_volume;
-    }
-    else
-    {
-      if (cpu->noise_envelope_divider == 0)
+      if (cpu->noise_envelope_start)
       {
+        cpu->noise_envelope_start = 0;
+        cpu->noise_envelope_decay_counter = 15;
         cpu->noise_envelope_divider = cpu->noise_volume;
-        if (cpu->noise_envelope_decay_counter == 0)
-        {
-          if (cpu->noise_counter_halt_envelope_loop)
-          {
-            cpu->noise_envelope_decay_counter = 15;
-          }
-        }
-        else
-        {
-          cpu->noise_envelope_decay_counter--;
-        }
       }
       else
       {
-        cpu->noise_envelope_divider--;
-      }
-    }
-
-    // Every other frame count
-    if (cpu->frame_counter % 2 == 1)
-    {
-      for (int i = 0; i < 2; i++)
-      {
-        if (cpu->pulse[i].length != 0 && !cpu->pulse[i].counter_halt_envelope_loop)
+        if (cpu->noise_envelope_divider == 0)
         {
-          cpu->pulse[i].length--;
-        }
-
-        uint16_t change_amount = cpu->pulse[i].timer >> cpu->pulse[i].sweep_shift;
-        if (cpu->pulse[i].sweep_negate)
-        {
-          // Channel 1 and 2 differ in how they negate the shift
-          change_amount = i == 0 ? ~change_amount : -change_amount;
-        }
-
-        uint16_t target_period = cpu->pulse[i].timer + change_amount;
-
-        if (target_period > 0x07ff)
-        {
-          cpu->pulse[i].sweep_mute = 1;
-        }
-
-        if (cpu->pulse[i].sweep_counter == 0 && cpu->pulse[i].sweep_enable && !cpu->pulse[i].sweep_mute)
-        {
-          cpu->pulse[i].timer = target_period;
-        }
-
-        if (cpu->pulse[i].sweep_counter == 0 || cpu->pulse[i].sweep_reload)
-        {
-          cpu->pulse[i].sweep_reload = 0;
-          cpu->pulse[i].sweep_counter = cpu->pulse[i].sweep_period;
+          cpu->noise_envelope_divider = cpu->noise_volume;
+          if (cpu->noise_envelope_decay_counter == 0)
+          {
+            if (cpu->noise_counter_halt_envelope_loop)
+            {
+              cpu->noise_envelope_decay_counter = 15;
+            }
+          }
+          else
+          {
+            cpu->noise_envelope_decay_counter--;
+          }
         }
         else
         {
-          cpu->pulse[i].sweep_counter--;
+          cpu->noise_envelope_divider--;
         }
       }
 
-      if (!cpu->triangle_counter_halt)
+      // Every other frame count
+      if (cpu->frame_counter % 2 == 1)
       {
-        cpu->triangle_counter_reload = 0;
+        for (int i = 0; i < 2; i++)
+        {
+          if (cpu->pulse[i].length != 0 && !cpu->pulse[i].counter_halt_envelope_loop)
+          {
+            cpu->pulse[i].length--;
+          }
+
+          uint16_t change_amount = cpu->pulse[i].timer >> cpu->pulse[i].sweep_shift;
+          if (cpu->pulse[i].sweep_negate)
+          {
+            // Channel 1 and 2 differ in how they negate the shift
+            change_amount = i == 0 ? ~change_amount : -change_amount;
+          }
+
+          uint16_t target_period = cpu->pulse[i].timer + change_amount;
+
+          if (target_period > 0x07ff)
+          {
+            cpu->pulse[i].sweep_mute = 1;
+          }
+
+          if (cpu->pulse[i].sweep_counter == 0 && cpu->pulse[i].sweep_enable && !cpu->pulse[i].sweep_mute)
+          {
+            cpu->pulse[i].timer = target_period;
+          }
+
+          if (cpu->pulse[i].sweep_counter == 0 || cpu->pulse[i].sweep_reload)
+          {
+            cpu->pulse[i].sweep_reload = 0;
+            cpu->pulse[i].sweep_counter = cpu->pulse[i].sweep_period;
+          }
+          else
+          {
+            cpu->pulse[i].sweep_counter--;
+          }
+        }
+
+        if (!cpu->triangle_counter_halt)
+        {
+          cpu->triangle_counter_reload = 0;
+        }
+
+        if (cpu->triangle_length > 0 && !cpu->triangle_counter_halt)
+        {
+          cpu->triangle_length--;
+        }
+
+        if (cpu->noise_length > 0)
+        {
+          cpu->noise_length--;
+        }
       }
 
-      if (cpu->triangle_length > 0 && !cpu->triangle_counter_halt)
+      if (cpu->frame_counter == 0)
       {
-        cpu->triangle_length--;
+        cpu->frame_counter = 4;
       }
-
-      if (cpu->noise_length > 0)
+      else
       {
-        cpu->noise_length--;
+        cpu->frame_counter--;
       }
-    }
-
-    if (cpu->frame_counter == 0)
-    {
-      cpu->frame_counter = 4;
     }
     else
     {
-      cpu->frame_counter--;
+      cpu->frame_divider--;
     }
-  }
-  else
-  {
-    cpu->frame_divider--;
   }
 }
 
