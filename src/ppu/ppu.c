@@ -18,23 +18,17 @@ enum ic_2c02_mmapped_registers
   mmapped_ppudata = 0x07,
 };
 
-void ppu_bus_read_internal(
-    uint8_t *restrict result,
-    struct ic_2c02_registers *ppu,
-    struct ic_2c02_bus *bus,
-    uint16_t address)
+uint8_t ppu_bus_read_mapper(uint8_t from_bus, struct ic_2c02_registers *ppu, uint16_t address)
 {
-  bus->read(&ppu->ppubus_data, bus->context, address);
-
   // The first 0x3f00 are handled by the cartridge
   if (address < 0x3f00)
   {
-    *result = ppu->ppubus_data;
+    return from_bus;
   }
   // The last 0x100 are 8 0x20 mirrors of palette ram
-  else if (address < 0x4000)
+  else
   {
-    *result = ppu->palette[address & 0x1f];
+    return ppu->palette[address & 0x1f];
   }
 }
 
@@ -48,6 +42,8 @@ void ppu_bus_write_internal(struct ic_2c02_registers *ppu, struct ic_2c02_bus *b
   // The last 0x100 are 8 0x20 mirrors of palette ram
   else if (address < 0x4000)
   {
+    uint8_t dummy;
+    bus->read(&dummy, bus->context, address);
     uint8_t palette_pos = address & 0x1f;
 
     if ((palette_pos & 0x03) == 0)
@@ -136,8 +132,6 @@ void ic_2c02_reset(struct ic_2c02_registers *ppu)
 
 int ic_2c02_clock(struct ic_2c02_registers *ppu, struct ic_2c02_bus *bus)
 {
-  uint8_t discard;
-
   ppu->clock++;
   int scanline = ppu->scanline;
   int dot = ppu->dot;
@@ -200,7 +194,9 @@ int ic_2c02_clock(struct ic_2c02_registers *ppu, struct ic_2c02_bus *bus)
       }
 
       uint8_t palette_color;
-      ppu_bus_read_internal(&palette_color, ppu, bus, 0x3f00 + color_abs);
+      uint8_t from_bus;
+      bus->read(&from_bus, bus->context, 0x3f00 + color_abs);
+      palette_color = ppu_bus_read_mapper(from_bus, ppu, 0x3f00 + color_abs);
       // uint8_t palette_color = ppu->palette[color_abs];
       if (ppu->mask & 0x01)
       {
@@ -230,7 +226,8 @@ int ic_2c02_clock(struct ic_2c02_registers *ppu, struct ic_2c02_bus *bus)
       else if (dot == 338 || dot == 340)
       {
         // Garbage NT read.
-        ppu_bus_read_internal(&discard, ppu, bus, tile_address);
+        uint8_t from_bus;
+        bus->read(&from_bus, bus->context, tile_address);
       }
       else if (dot > 0)
       {
@@ -241,19 +238,25 @@ int ic_2c02_clock(struct ic_2c02_registers *ppu, struct ic_2c02_bus *bus)
           uint8_t val;
           // Load NT byte
           // Shift 4 bits now to save 2 shifts later.
-          ppu_bus_read_internal(&val, ppu, bus, tile_address);
+          uint8_t from_bus;
+          bus->read(&from_bus, bus->context, tile_address);
+          val = ppu_bus_read_mapper(from_bus, ppu, tile_address);
           ppu->nametable_byte_next = val << 4;
         }
         break;
         case 0x04:
           // Load AT byte
-          ppu_bus_read_internal(&ppu->attribute_byte_next, ppu, bus, attribute_address);
+          uint8_t from_bus;
+          bus->read(&from_bus, bus->context, attribute_address);
+          ppu->attribute_byte_next = ppu_bus_read_mapper(from_bus, ppu, attribute_address);
           break;
         case 0x06:
         {
           // Low BG tile
           uint8_t val;
-          ppu_bus_read_internal(&val, ppu, bus, ppu->background | ppu->nametable_byte_next | (ppu->vram_address >> 12));
+          uint8_t from_bus;
+          bus->read(&from_bus, bus->context, ppu->background | ppu->nametable_byte_next | (ppu->vram_address >> 12));
+          val = ppu_bus_read_mapper(from_bus, ppu, ppu->background | ppu->nametable_byte_next | (ppu->vram_address >> 12));
           ppu->pattern_lo_next = val;
         }
         break;
@@ -261,7 +264,9 @@ int ic_2c02_clock(struct ic_2c02_registers *ppu, struct ic_2c02_bus *bus)
         {
           // High BG tile
           uint8_t val;
-          ppu_bus_read_internal(&val, ppu, bus, ppu->background | ppu->nametable_byte_next | (ppu->vram_address >> 12) | 0x08);
+          uint8_t from_bus;
+          bus->read(&from_bus, bus->context, ppu->background | ppu->nametable_byte_next | (ppu->vram_address >> 12) | 0x08);
+          val = ppu_bus_read_mapper(from_bus, ppu, ppu->background | ppu->nametable_byte_next | (ppu->vram_address >> 12) | 0x08);
           ppu->pattern_hi_next = val;
 
           ppu->pattern_lo |= ppu->pattern_lo_next;
@@ -314,7 +319,9 @@ int ic_2c02_clock(struct ic_2c02_registers *ppu, struct ic_2c02_bus *bus)
     {
       if (ppu->vram_address >= 0x3f00)
       {
-        ppu_bus_read_internal(&ppu->screen[scanline][dot - 1], ppu, bus, ppu->vram_address & 0x3f1F);
+        uint8_t from_bus;
+        bus->read(&from_bus, bus->context, ppu->vram_address & 0x3f1F);
+        ppu->screen[scanline][dot - 1] = ppu_bus_read_mapper(from_bus, ppu, ppu->vram_address & 0x3f1F);
       }
     }
   }
@@ -410,8 +417,11 @@ int ic_2c02_clock(struct ic_2c02_registers *ppu, struct ic_2c02_bus *bus)
     else if (dot < 265)
     { // For absolute cycle-accuracy, do this in different cycles.
       struct oam_value sprite = ppu->secondary_oam.data[dot & 0x07];
-      ppu_bus_read_internal(&ppu->sprite_pattern_lo[dot & 0x07], ppu, bus, ppu->sprite_pattern_table | (sprite.tile_index << 4) | (scanline - sprite.y));
-      ppu_bus_read_internal(&ppu->sprite_pattern_hi[dot & 0x07], ppu, bus, ppu->sprite_pattern_table | (sprite.tile_index << 4) | 8 | (scanline - sprite.y));
+      uint8_t from_bus;
+      bus->read(&from_bus, bus->context, ppu->sprite_pattern_table | (sprite.tile_index << 4) | (scanline - sprite.y));
+      ppu->sprite_pattern_lo[dot & 0x07] = ppu_bus_read_mapper(from_bus, ppu, ppu->sprite_pattern_table | (sprite.tile_index << 4) | (scanline - sprite.y));
+      bus->read(&from_bus, bus->context, ppu->sprite_pattern_table | (sprite.tile_index << 4) | 8 | (scanline - sprite.y));
+      ppu->sprite_pattern_hi[dot & 0x07] = ppu_bus_read_mapper(from_bus, ppu, ppu->sprite_pattern_table | (sprite.tile_index << 4) | 8 | (scanline - sprite.y));
       ppu->sprite_attributes[dot & 0x07] = sprite.attributes;
       ppu->sprite_x[dot & 0x07] = sprite.x;
     }
@@ -449,7 +459,7 @@ int ic_2c02_clock(struct ic_2c02_registers *ppu, struct ic_2c02_bus *bus)
 
 void ic_2c02_mmapped_read(uint8_t *restrict data, struct ic_2c02_registers *ppu, struct ic_2c02_bus *bus, uint16_t address)
 {
-  uint8_t dummy;
+  uint8_t from_bus;
   switch (address)
   {
   case mmapped_ppuctrl:
@@ -458,12 +468,13 @@ void ic_2c02_mmapped_read(uint8_t *restrict data, struct ic_2c02_registers *ppu,
   case mmapped_ppuscroll:
   case mmapped_ppuaddr:
     *data = ppu->ppubus_data;
-    ppu_bus_read_internal(&dummy, ppu, bus, ppu->vram_address & 0x3FFF);
+    bus->read(&from_bus, bus->context, ppu->vram_address & 0x3FFF);
+    ppu->ppubus_data = *data;
     break;
   case mmapped_ppustatus:
   {
     *data = (ppu->status & 0xe0) | (ppu->ppubus_data & 0x1f);
-    ppu_bus_read_internal(&dummy, ppu, bus, ppu->vram_address & 0x3FFF);
+    bus->read(&from_bus, bus->context, ppu->vram_address & 0x3FFF);
     ppu->ppudata_buffer = ppu->ppubus_data;
     ppu->ppubus_data = *data;
     ppu->status &= 0x7F;
@@ -472,7 +483,8 @@ void ic_2c02_mmapped_read(uint8_t *restrict data, struct ic_2c02_registers *ppu,
   }
   case mmapped_oamdata:
     *data = ppu->primary_oam.raw[ppu->oam_addr];
-    ppu_bus_read_internal(&dummy, ppu, bus, ppu->vram_address & 0x3FFF);
+    uint8_t from_bus;
+    bus->read(&from_bus, bus->context, ppu->vram_address & 0x3FFF);
     ppu->ppubus_data = *data;
     break;
   case mmapped_ppudata:
@@ -480,17 +492,16 @@ void ic_2c02_mmapped_read(uint8_t *restrict data, struct ic_2c02_registers *ppu,
 
     if (ppu->vram_address < 0x3F00)
     {
-      uint8_t result;
-      ppu_bus_read_internal(&result, ppu, bus, ppu->vram_address & 0x3FFF);
       *data = ppu->ppudata_buffer;
-      ppu->ppudata_buffer = ppu->ppubus_data;
+      bus->read(&ppu->ppudata_buffer, bus->context, ppu->vram_address & 0x3FFF);
     }
     else
     {
       *data = ppu->ppubus_data;
       uint8_t result;
-      ppu_bus_read_internal(&result, ppu, bus, ppu->vram_address & 0x3FFF);
-      ppu->ppudata_buffer = ppu->ppubus_data;
+      uint8_t from_bus;
+      bus->read(&ppu->ppudata_buffer, bus->context, ppu->vram_address & 0x3FFF);
+      result = ppu_bus_read_mapper(from_bus, ppu, ppu->vram_address & 0x3FFF);
       if (ppu->mask & 0x01)
       {
         result &= 0x30;

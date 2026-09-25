@@ -47,6 +47,7 @@ int main(int argc, char *argv[])
   printf("Mapper: %d\n", rom.mapper_id);
   printf("PRG_ROM size: %x (%d) bytes\n", rom.prg_rom_size, rom.prg_rom_size);
   printf("CHR_ROM size: %x (%d) bytes\n", rom.chr_rom_size, rom.chr_rom_size);
+  printf("Mirroring: %s\n", rom.mirroring ? "Vertical" : "Horizontal");
 
   struct cartridge *cartridge = cartridge_builder(&rom);
   if (!cartridge)

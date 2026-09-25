@@ -132,7 +132,7 @@ void ic_rp2a03_tick(struct ic_rp2a03_registers *cpu, struct ic_6502_bus *bus, bo
   }
   else
   {
-    ic_6502_tick(&cpu->ic_6502, bus, irq, reset);
+    ic_6502_tick(&cpu->ic_6502, bus, irq | cpu->irq, reset);
   }
 
   if (reset)
@@ -405,6 +405,9 @@ void ic_rp2a03_tick(struct ic_rp2a03_registers *cpu, struct ic_6502_bus *bus, bo
       if (cpu->frame_counter == 0)
       {
         cpu->frame_counter = 4;
+        if (!cpu->irq_inhibit) {
+          cpu->irq = true;
+        }
       }
       else
       {
@@ -447,28 +450,74 @@ void ic_rp2a03_mmapped_read(uint8_t *restrict data, struct ic_rp2a03_registers *
     break;
   case 0x0015:
   {
-    *data = 0;
+    // *data = 0;
     if (cpu->pulse[0].length > 0)
     {
       *data |= 0x01;
+    }
+    else
+    {
+      *data &= 0xfe;
     }
 
     if (cpu->pulse[1].length > 0)
     {
       *data |= 0x02;
     }
+    else
+    {
+      *data &= 0xfd;
+    }
 
     if (cpu->triangle_length > 0)
     {
       *data |= 0x04;
+    }
+    else
+    {
+      *data &= 0xfb;
     }
 
     if (cpu->noise_length > 0)
     {
       *data |= 0x08;
     }
+    else
+    {
+      *data &= 0xf7;
+    }
 
-    return; // result;
+    // TODO: DMC
+    if (cpu->noise_length > 0)
+    {
+      *data |= 0x10;
+    }
+    else
+    {
+      *data &= 0xef;
+    }
+
+    // TODO: Frame Interrupt
+    if (cpu->irq > 0)
+    {
+      *data |= cpu->irq << 6;
+      cpu->irq = false;
+    }
+    else
+    {
+      *data &= 0xfb;
+    }
+
+    // TODO: DMC Interrupt
+    if (cpu->noise_length > 0)
+    {
+      *data |= 0x80;
+    }
+    else
+    {
+      *data &= 0x7f;
+    }
+    return;
   }
   break;
   case 0x16:
@@ -623,7 +672,12 @@ void ic_rp2a03_mmapped_write(struct ic_rp2a03_registers *cpu, uint16_t address, 
     }
     break;
   case 0x0017:
-    cpu->frame_counter_mode = data >> 7;
+    cpu->frame_counter_mode = (data & 0x80) > 0;
+    cpu->irq_inhibit = (data & 0x40) > 0;
+
+    if (cpu->irq_inhibit) {
+      cpu->irq = false;
+    }
 
     cpu->player2.strobe = data & 0x01;
     if (cpu->player2.strobe)

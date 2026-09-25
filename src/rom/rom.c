@@ -44,10 +44,10 @@ int read_rom(struct nes_rom *rom, FILE *rom_file)
   rom->prg_rom_size = header_data[4];
   rom->chr_rom_size = header_data[5];
 
-  rom->mirroring = !!(header_data[6] & 0x01);
-  rom->non_volatile_memory = !!(header_data[6] & 0x02);
-  rom->has_trainer = !!(header_data[6] & 0x04);
-  rom->four_screen_mode = !!(header_data[6] & 0x08);
+  rom->mirroring = (header_data[6] & 0x01) > 0;
+  rom->non_volatile_memory = !!(header_data[6] & 0x02) > 0;
+  rom->has_trainer = (header_data[6] & 0x04) > 0;
+  rom->four_screen_mode = (header_data[6] & 0x08) > 0;
 
   switch (rom->version)
   {

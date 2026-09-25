@@ -65,19 +65,27 @@ void cartridge0_read_ppu_bus(uint8_t *restrict data, void *ctx, uint8_t *ppu_ram
   }
   else if (address < 0x4000)
   {
+    if (!cartridge->nametable_mirroring)
+    {
+      address = (address & 0x3ff) | ((address & 0x800) >> 1);
+    }
     *data = ppu_ram[address & 0x7ff];
   }
 }
 
 void cartridge0_write_ppu_bus(void *ctx, uint8_t *ppu_ram, uint16_t address, uint8_t data)
 {
-  // TODO: Nametable mirroring.
+  struct mapper_0_cartridge *cartridge = (struct mapper_0_cartridge *)ctx;
   if (address < 0x2000)
   {
     // NOP
   }
   else if (address < 0x4000)
   {
+    if (!cartridge->nametable_mirroring)
+    {
+      address = (address & 0x3ff) | ((address & 0x800) >> 1);
+    }
     ppu_ram[address & 0x7ff] = data;
   }
 }
@@ -105,6 +113,7 @@ struct cartridge *cartridge_builder(struct nes_rom *rom)
         .prg_rom = rom->prg_rom,
         .chr_rom = rom->chr_rom,
         .prg_ram_size = rom->prg_ram_size,
+        .nametable_mirroring = rom->mirroring,
     };
     cartridge->prg_ram = malloc(rom->prg_ram_size);
 

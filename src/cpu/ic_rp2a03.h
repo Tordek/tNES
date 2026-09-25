@@ -82,6 +82,9 @@ struct ic_rp2a03_registers
 
   int frame_counter_mode;
 
+  bool irq_inhibit;
+  bool irq;
+
   int divider;
   int frame_divider;
   int frame_counter;

@@ -24,19 +24,23 @@ void cpu_bus_read(uint8_t *restrict result, void *device, uint16_t address)
   if (address < 0x2000)
   {
     *result = machine->main_ram[address & 0x07ff];
+    machine->cpu_bus_data = *result;
   }
   // The next 0x2000 is mirrored as 0x400 8-byte blocks of PPU registers.
   else if (address < 0x4000)
   {
     ic_2c02_mmapped_read(result, &machine->ppu, &machine->ppu_bus, address & 0x07);
+    machine->cpu_bus_data = *result;
   }
   // 0x20 bytes of APU and Controller handling.
   else if (address < 0x4020)
   {
     ic_rp2a03_mmapped_read(result, &machine->cpu, address & 0x001f);
   }
-
-  machine->cpu_bus_data = *result;
+  else
+  {
+    machine->cpu_bus_data = *result;
+  }
 }
 
 void cpu_bus_write(void *device, uint16_t address, uint8_t data)

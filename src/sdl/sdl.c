@@ -103,12 +103,12 @@ bool initialize_sdl_audio(struct tnes_machine *machine, struct renderer_state *s
 
 bool initialize_sdl_video(struct tnes_machine *machine, struct renderer_state *state)
 {
-  state->font = TTF_OpenFont("cour.ttf", 14);
-  if (!state->font)
-  {
-    SDL_Log("Failed to initialize Font: %s", SDL_GetError());
-    return NULL;
-  }
+  // state->font = TTF_OpenFont("cour.ttf", 14);
+  // if (!state->font)
+  // {
+  //   SDL_Log("Failed to initialize Font: %s", SDL_GetError());
+  //   return NULL;
+  // }
 
   state->main_window = SDL_CreateWindow("NES", 512 * 2, 381 * 2, 0);
   if (!state->main_window)
@@ -330,25 +330,25 @@ void render(struct renderer_state *state)
       total_ticks += state->ticks[i];
     }
 
-    char fps_string[10];
-    sprintf(fps_string, "%4.0f FPS", 1000.0f / (total_ticks / 10.0f));
-    SDL_Surface *textSurface = TTF_RenderText_Solid(state->font, fps_string, strlen(fps_string), fg);
-    if (!textSurface)
-    {
-      SDL_Log("Failed to fill surface: %s", SDL_GetError());
-    }
-    SDL_Rect textLocation = {
-        .x = 2,
-        .y = 256,
-        .w = 0,
-        .h = 0,
-    };
-    success = SDL_BlitSurface(textSurface, NULL, debug_surface, &textLocation);
-    if (!success)
-    {
-      SDL_Log("Failed to fill surface: %s", SDL_GetError());
-    }
-    SDL_DestroySurface(textSurface);
+    // char fps_string[10];
+    // sprintf(fps_string, "%4.0f FPS", 1000.0f / (total_ticks / 10.0f));
+    // SDL_Surface *textSurface = TTF_RenderText_Solid(state->font, fps_string, strlen(fps_string), fg);
+    // if (!textSurface)
+    // {
+    //   SDL_Log("Failed to fill surface: %s", SDL_GetError());
+    // }
+    // SDL_Rect textLocation = {
+    //     .x = 2,
+    //     .y = 256,
+    //     .w = 0,
+    //     .h = 0,
+    // };
+    // success = SDL_BlitSurface(textSurface, NULL, debug_surface, &textLocation);
+    // if (!success)
+    // {
+    //   SDL_Log("Failed to fill surface: %s", SDL_GetError());
+    // }
+    // SDL_DestroySurface(textSurface);
 
     SDL_Surface *s = SDL_CreateSurface(16, 4, SDL_PIXELFORMAT_INDEX8);
     if (!s)
